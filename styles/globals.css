@@ -1,0 +1,32 @@
+:root{
+  --bg:#0B0B12; --panel:#111122; --text:#EDEEF6; --muted:#B7BACB;
+  --green:#4CFF7A; --orange:#FF8A1E; --stroke: rgba(255,255,255,0.10);
+  --radius: 18px; --shadow: 0 18px 60px rgba(0,0,0,0.55); --max: 980px;
+}
+*{box-sizing:border-box}
+html,body{height:100%}
+body{
+  margin:0;
+  font-family: ui-sans-serif, system-ui, -apple-system, Segoe UI, Roboto, Arial;
+  color:var(--text);
+  background:
+    radial-gradient(900px 450px at 18% 22%, rgba(76,255,122,0.16), transparent 60%),
+    radial-gradient(900px 450px at 84% 30%, rgba(255,138,30,0.18), transparent 55%),
+    linear-gradient(180deg, #07070F 0%, var(--bg) 55%, #07070F 100%);
+}
+a{color:inherit}
+.wrap{max-width:var(--max); margin:0 auto; padding:0 16px}
+.nav{position:sticky; top:0; z-index:20; backdrop-filter: blur(12px); background: rgba(11,11,18,0.68); border-bottom:1px solid var(--stroke);}
+.nav-inner{display:flex; justify-content:space-between; align-items:center; padding:14px 0}
+.brand{font-weight:900; letter-spacing:0.2px}
+.grad{background: linear-gradient(90deg, var(--green), var(--orange)); -webkit-background-clip:text; background-clip:text; color:transparent;}
+.card{border:1px solid var(--stroke); background: rgba(17,17,34,0.78); border-radius: var(--radius); box-shadow: var(--shadow); padding:16px;}
+.grid{display:grid; grid-template-columns:1fr; gap:14px}
+@media(min-width:900px){ .grid{grid-template-columns: 1fr 1fr;} }
+.input{width:100%; padding:12px 12px; border-radius:14px; border:1px solid var(--stroke); background: rgba(15,15,26,0.65); color:var(--text); outline:none;}
+.row{display:flex; gap:10px; flex-wrap:wrap; align-items:center}
+.btn{padding:12px 14px; border-radius:14px; border:1px solid var(--stroke); background: rgba(17,17,34,0.9); color:var(--text); font-weight:800; cursor:pointer;}
+.btn-primary{border:none; background: linear-gradient(135deg, rgba(76,255,122,0.95), rgba(255,138,30,0.95)); color:#0B0B12;}
+.small{color:rgba(237,238,246,0.75); font-size:13px; line-height:1.5}
+.badge{display:inline-flex; gap:8px; align-items:center; padding:8px 10px; border:1px solid var(--stroke); border-radius:999px; background: rgba(15,15,26,0.6); color:var(--muted); font-weight:800; font-size:13px}
+hr{border:none; border-top:1px solid var(--stroke); margin:14px 0}
