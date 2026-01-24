@@ -42,12 +42,7 @@ function sumByCategory(signals: { id: string; weight: number }[]) {
     CONTEXT: 0,
     OTHER: 0,
   };
-  for (const s of signals) {
-    buckets[categorizeSignalId(s.id)] += s.weight || 0;
-  }
-  return buckets;
-}
-/* =========================
+  /* =========================
    Verdict + Share helpers
    ========================= */
 
@@ -119,6 +114,11 @@ function toTweetText(args: {
 
 function makeXIntentUrl(text: string) {
   return `https://twitter.com/intent/tweet?text=${encodeURIComponent(text)}`;
+}
+  for (const s of signals) {
+    buckets[categorizeSignalId(s.id)] += s.weight || 0;
+  }
+  return buckets;
 }
 /* =========================
    Page
@@ -316,7 +316,7 @@ export default function Home() {
                   </div>
                   <RiskBadge level={data.risk.level} />
                 </div>
-
+</div>
                 <hr />
 
                 <div className="row" style={{ justifyContent: "space-between" }}>
@@ -336,65 +336,7 @@ export default function Home() {
                 </div>
               </div>
 
-              {(() => {
-  const vLevel = verdictFromScore(data.risk.score);
-  const v = VERDICT_COPY[vLevel];
-
-  const topSignals = [...data.signals]
-    .sort((a, b) => (b.weight || 0) - (a.weight || 0))
-    .slice(0, 2)
-    .map((s) => s.label);
-
-  const url =
-    typeof window !== "undefined"
-      ? window.location.href
-      : "https://pump-guard-azure.vercel.app/";
-
-  const tweet = toTweetText({
-    chain: data.chain,
-    score: data.risk.score,
-    level: vLevel,
-    confidence: data.risk.confidence,
-    mode: data.risk.mode,
-    topSignals,
-    url,
-  });
-
-  return (
-    <>
-      <hr />
-      <div style={{ fontWeight: 900, marginBottom: 6 }}>VERDICT</div>
-      <div style={{ fontWeight: 800 }}>{v.headline}</div>
-
-      <div style={{ height: 8 }} />
-      <div className="small" style={{ display: "grid", gap: 4 }}>
-        {v.bullets.map((t) => (
-          <div key={t}>• {t}</div>
-        ))}
-      </div>
-
-      <div style={{ height: 10 }} />
-      <div className="small">
-        <b>Suggested action:</b> {v.action}
-      </div>
-
-      <div style={{ height: 12 }} />
-      <div className="row" style={{ gap: 10 }}>
-        <a
-          className="btn btn-primary"
-          href={makeXIntentUrl(tweet)}
-          target="_blank"
-          rel="noreferrer"
-        >
-          Share on X
-        </a>
-        <div className="small" style={{ opacity: 0.8 }}>
-          You control what you share.
-        </div>
-      </div>
-    </>
-  );
-})()}
+              
               <div className="card">
                 <div style={{ fontWeight: 900 }}>WHY (signals)</div>
                 <hr />
@@ -422,7 +364,125 @@ export default function Home() {
                 </div>
               </div>
             </div>
+<div className="card">
+{(() => {
+const vLevel = verdictFromScore(data.risk.score);
+const v = VERDICT_COPY[vLevel];
 
+const topSignals = [...data.signals]
+.sort((a, b) => (b.weight || 0) - (a.weight || 0))
+.slice(0, 2)
+.map((s) => s.label);
+const url =
+typeof window !== "undefined"
+
+? window.location.href
+: "https://pump-guard-azure.vercel.app/";
+const tweet = toTweetText({
+chain: data.chain,
+
+score: data.risk.score,
+level: vLevel,
+confidence: data.risk.confidence,
+mode: data.risk.mode,
+topSignals,
+url,
+});
+return (
+<>
+
+<hr />
+<div style={{ fontWeight: 900, marginBottom: 6 }}>VERDICT</div>
+<div style={{ fontWeight: 800 }}>{v.headline}</div>
+<div style={{ height: 8 }} />
+<div className="small" style={{ display: "grid", gap: 4 }}>
+
+{v.bullets.map((t) => (
+<div key={t}>• {t}</div>
+))}
+</div>
+<div style={{ height: 10 }} />
+<div className="small">
+
+<b>Suggested action:</b> {v.action}
+</div>
+<div style={{ height: 12 }} />
+<div className="row" style={{ gap: 10 }}>
+
+<a
+className="btn btn-primary"
+href={makeXIntentUrl(tweet)}
+target="_blank"
+rel="noreferrer"
+>
+Share on X
+</a>
+<div className="small" style={{ opacity: 0.8 }}>
+You control what you share.
+</div>
+</div>
+</>
+);
+})()}
+</div>{(() => {
+const vLevel = verdictFromScore(data.risk.score);
+const v = VERDICT_COPY[vLevel];
+
+const topSignals = [...data.signals]
+.sort((a, b) => (b.weight || 0) - (a.weight || 0))
+.slice(0, 2)
+.map((s) => s.label);
+const url =
+typeof window !== "undefined"
+
+? window.location.href
+: "https://pump-guard-azure.vercel.app/";
+const tweet = toTweetText({
+chain: data.chain,
+
+score: data.risk.score,
+level: vLevel,
+confidence: data.risk.confidence,
+mode: data.risk.mode,
+topSignals,
+url,
+});
+return (
+<>
+
+<hr />
+<div style={{ fontWeight: 900, marginBottom: 6 }}>VERDICT</div>
+<div style={{ fontWeight: 800 }}>{v.headline}</div>
+<div style={{ height: 8 }} />
+<div className="small" style={{ display: "grid", gap: 4 }}>
+
+{v.bullets.map((t) => (
+<div key={t}>• {t}</div>
+))}
+</div>
+<div style={{ height: 10 }} />
+<div className="small">
+
+<b>Suggested action:</b> {v.action}
+</div>
+<div style={{ height: 12 }} />
+<div className="row" style={{ gap: 10 }}>
+
+<a
+className="btn btn-primary"
+href={makeXIntentUrl(tweet)}
+target="_blank"
+rel="noreferrer"
+>
+Share on X
+</a>
+<div className="small" style={{ opacity: 0.8 }}>
+You control what you share.
+</div>
+</div>
+</>
+);
+})()}
             {/* ---------- Breakdown ---------- */}
             <div style={{ height: 14 }} />
             <div className="card">
