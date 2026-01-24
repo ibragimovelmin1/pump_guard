@@ -47,7 +47,79 @@ function sumByCategory(signals: { id: string; weight: number }[]) {
   }
   return buckets;
 }
+/* =========================
+   Verdict + Share helpers
+   ========================= */
 
+type VerdictLevel = "LOW" | "MEDIUM" | "HIGH";
+
+function verdictFromScore(score: number): VerdictLevel {
+  if (score >= 67) return "HIGH";
+  if (score >= 34) return "MEDIUM";
+  return "LOW";
+}
+
+const VERDICT_COPY: Record<
+  VerdictLevel,
+  { headline: string; bullets: string[]; action: string }
+> = {
+  LOW: {
+    headline: "Low risk signals detected",
+    bullets: [
+      "No critical red flags detected in current on-chain signals.",
+      "Token is very new — volatility is likely high.",
+      "Always manage position size and exit plan.",
+    ],
+    action: "Suitable for quick pre-entry checks. Still not risk-free.",
+  },
+  MEDIUM: {
+    headline: "Moderate risk signals detected",
+    bullets: [
+      "Some on-chain risk signals are present.",
+      "Potential concerns require manual review.",
+      "Higher uncertainty compared to low-risk setups.",
+    ],
+    action: "Consider smaller size and faster invalidation.",
+  },
+  HIGH: {
+    headline: "High risk signals detected",
+    bullets: [
+      "Multiple red flags detected in on-chain behavior.",
+      "High probability of unfavorable outcomes.",
+      "Historical patterns resemble common rug scenarios.",
+    ],
+    action: "Avoid or treat as extremely high risk.",
+  },
+};
+
+function toTweetText(args: {
+  chain: string;
+  score: number;
+  level: VerdictLevel;
+  confidence?: string;
+  mode?: string;
+  topSignals: string[];
+  url: string;
+}) {
+  const emoji = args.level === "HIGH" ? "🔴" : args.level === "MEDIUM" ? "🟡" : "🟢";
+  const signalsLine =
+    args.topSignals.length > 0 ? `\nSignals: ${args.topSignals.join(" • ")}` : "";
+
+  return (
+    `Checked with PUMP.GUARD\n\n` +
+    `${emoji} Risk score: ${args.score} / 100 (${args.level})\n` +
+    `Chain: ${args.chain.toUpperCase()}\n` +
+    (args.confidence ? `Confidence: ${args.confidence}\n` : "") +
+    (args.mode ? `Mode: ${args.mode}\n` : "") +
+    `${signalsLine}\n\n` +
+    `Not financial advice. Just signals.\n` +
+    `${args.url}`
+  );
+}
+
+function makeXIntentUrl(text: string) {
+  return `https://twitter.com/intent/tweet?text=${encodeURIComponent(text)}`;
+}
 /* =========================
    Page
    ========================= */
@@ -264,6 +336,65 @@ export default function Home() {
                 </div>
               </div>
 
+              {(() => {
+  const vLevel = verdictFromScore(data.risk.score);
+  const v = VERDICT_COPY[vLevel];
+
+  const topSignals = [...data.signals]
+    .sort((a, b) => (b.weight || 0) - (a.weight || 0))
+    .slice(0, 2)
+    .map((s) => s.label);
+
+  const url =
+    typeof window !== "undefined"
+      ? window.location.href
+      : "https://pump-guard-azure.vercel.app/";
+
+  const tweet = toTweetText({
+    chain: data.chain,
+    score: data.risk.score,
+    level: vLevel,
+    confidence: data.risk.confidence,
+    mode: data.risk.mode,
+    topSignals,
+    url,
+  });
+
+  return (
+    <>
+      <hr />
+      <div style={{ fontWeight: 900, marginBottom: 6 }}>VERDICT</div>
+      <div style={{ fontWeight: 800 }}>{v.headline}</div>
+
+      <div style={{ height: 8 }} />
+      <div className="small" style={{ display: "grid", gap: 4 }}>
+        {v.bullets.map((t) => (
+          <div key={t}>• {t}</div>
+        ))}
+      </div>
+
+      <div style={{ height: 10 }} />
+      <div className="small">
+        <b>Suggested action:</b> {v.action}
+      </div>
+
+      <div style={{ height: 12 }} />
+      <div className="row" style={{ gap: 10 }}>
+        <a
+          className="btn btn-primary"
+          href={makeXIntentUrl(tweet)}
+          target="_blank"
+          rel="noreferrer"
+        >
+          Share on X
+        </a>
+        <div className="small" style={{ opacity: 0.8 }}>
+          You control what you share.
+        </div>
+      </div>
+    </>
+  );
+})()}
               <div className="card">
                 <div style={{ fontWeight: 900 }}>WHY (signals)</div>
                 <hr />
