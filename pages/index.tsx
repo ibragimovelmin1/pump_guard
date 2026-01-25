@@ -6,9 +6,15 @@ import { detectChain } from "../lib/detect";
    UI helpers
    ========================= */
 
-function RiskBadge({ level }: { level: string }) {
+type RiskLevel = "LOW" | "MEDIUM" | "HIGH";
+
+function RiskBadge({ level }: { level: RiskLevel | string }) {
   const emoji = level === "HIGH" ? "🔴" : level === "MEDIUM" ? "🟡" : "🟢";
-  return <span className="badge">{emoji} {level}</span>;
+  return (
+    <span className="badge">
+      {emoji} {String(level)}
+    </span>
+  );
 }
 
 type FlagsResp = {
@@ -24,9 +30,9 @@ type FlagsResp = {
    Signal categorization
    ========================= */
 
-function categorizeSignalId(
-  id: string
-): "PERMISSIONS" | "DISTRIBUTION" | "DEV_BEHAVIOR" | "CONTEXT" | "OTHER" {
+type SignalCategory = "PERMISSIONS" | "DISTRIBUTION" | "DEV_BEHAVIOR" | "CONTEXT" | "OTHER";
+
+function categorizeSignalId(id: string): SignalCategory {
   if (id.includes("MINT_AUTHORITY") || id.includes("FREEZE_AUTHORITY")) return "PERMISSIONS";
   if (id.startsWith("TOP10_") || id.startsWith("DEV_TOP_HOLDER")) return "DISTRIBUTION";
   if (id.startsWith("DEV_EARLY_") || id.startsWith("HELIUS_")) return "DEV_BEHAVIOR";
@@ -35,18 +41,22 @@ function categorizeSignalId(
 }
 
 function sumByCategory(signals: { id: string; weight: number }[]) {
-  const buckets: Record<string, number> = {
+  const buckets: Record<SignalCategory, number> = {
     PERMISSIONS: 0,
     DISTRIBUTION: 0,
     DEV_BEHAVIOR: 0,
     CONTEXT: 0,
     OTHER: 0,
   };
+
   for (const s of signals) {
-    buckets[categorizeSignalId(s.id)] += s.weight || 0;
+    const key = categorizeSignalId(s.id);
+    buckets[key] += s.weight || 0;
   }
+
   return buckets;
 }
+
 /* =========================
    Verdict + Share helpers
    ========================= */
@@ -59,10 +69,7 @@ function verdictFromScore(score: number): VerdictLevel {
   return "LOW";
 }
 
-const VERDICT_COPY: Record<
-  VerdictLevel,
-  { headline: string; bullets: string[]; action: string }
-> = {
+const VERDICT_COPY: Record<VerdictLevel, { headline: string; bullets: string[]; action: string }> = {
   LOW: {
     headline: "Low risk signals detected",
     bullets: [
@@ -102,8 +109,7 @@ function toTweetText(args: {
   url: string;
 }) {
   const emoji = args.level === "HIGH" ? "🔴" : args.level === "MEDIUM" ? "🟡" : "🟢";
-  const signalsLine =
-    args.topSignals.length > 0 ? `\nSignals: ${args.topSignals.join(" • ")}` : "";
+  const signalsLine = args.topSignals.length > 0 ? `\nSignals: ${args.topSignals.join(" • ")}` : "";
 
   return (
     `Checked with PUMP.GUARD\n\n` +
@@ -120,6 +126,7 @@ function toTweetText(args: {
 function makeXIntentUrl(text: string) {
   return `https://twitter.com/intent/tweet?text=${encodeURIComponent(text)}`;
 }
+
 /* =========================
    Page
    ========================= */
@@ -139,15 +146,16 @@ export default function Home() {
 
   const [flags, setFlags] = useState<FlagsResp | null>(null);
   const [flagReason, setFlagReason] = useState("");
-  const [flagLoading, setFlagLoading] =
-    useState<"RUGGED" | "SUS" | "TRUSTED" | "">("");
+  const [flagLoading, setFlagLoading] = useState<"RUGGED" | "SUS" | "TRUSTED" | "">("");
   const [flagErr, setFlagErr] = useState("");
 
+  // target зависит от результата скоринга (токен/дев)
   const target = useMemo(() => {
     if (!data) return null;
+
     const target_type = data.input_type === "token" ? "token" : "dev";
-    const target_address =
-      data.input_type === "token" ? data.token?.address : data.dev?.address;
+    const target_address = data.input_type === "token" ? data.token?.address : data.dev?.address;
+
     if (!target_address) return null;
     return { chain: data.chain, target_type, target_address };
   }, [data]);
@@ -155,12 +163,14 @@ export default function Home() {
   async function fetchFlags() {
     if (!target) return;
     setFlagErr("");
+
     try {
       const qs = new URLSearchParams({
         chain: target.chain,
         target_type: target.target_type,
         target_address: target.target_address,
       });
+
       const res = await fetch(`/api/flags?${qs.toString()}`);
       const j = await res.json();
       if (!res.ok) throw new Error(j?.error || "Failed to load flags");
@@ -179,8 +189,10 @@ export default function Home() {
 
   async function submitFlag(flag_type: "RUGGED" | "SUS" | "TRUSTED") {
     if (!target) return;
+
     setFlagLoading(flag_type);
     setFlagErr("");
+
     try {
       const res = await fetch("/api/flag", {
         method: "POST",
@@ -193,8 +205,10 @@ export default function Home() {
           reason: flagReason,
         }),
       });
+
       const j = await res.json();
       if (!res.ok) throw new Error(j?.error || "Failed to submit flag");
+
       setFlagReason("");
       await fetchFlags();
     } catch (e: any) {
@@ -211,6 +225,7 @@ export default function Home() {
     setError("");
     setData(null);
     setFlags(null);
+
     try {
       const qs = new URLSearchParams({ input, chain, type });
       const res = await fetch(`/api/score?${qs.toString()}`);
@@ -233,8 +248,7 @@ export default function Home() {
       <div className="nav">
         <div className="wrap nav-inner">
           <div className="brand">
-            PUMP<span className="grad">.GUARD</span>{" "}
-            <span className="small">MVP</span>
+            PUMP<span className="grad">.GUARD</span> <span className="small">MVP</span>
           </div>
           <div className="small">Not financial advice. Just signals.</div>
         </div>
@@ -245,8 +259,7 @@ export default function Home() {
         <div className="card">
           <h1 style={{ margin: "0 0 8px" }}>Check the risk before you buy</h1>
           <div className="small">
-            Paste a token (SOL mint / 0x contract) or a dev wallet. Chain
-            auto-detect is supported.
+            Paste a token (SOL mint / 0x contract) or a dev wallet. Chain auto-detect is supported.
           </div>
 
           <div style={{ height: 12 }} />
@@ -262,11 +275,7 @@ export default function Home() {
 
           <div className="row">
             <label className="small">Chain:</label>
-            <select
-              className="input"
-              value={chain}
-              onChange={(e) => setChain(e.target.value as any)}
-            >
+            <select className="input" value={chain} onChange={(e) => setChain(e.target.value as any)}>
               <option value="auto">auto (detected: {detected})</option>
               <option value="sol">sol</option>
               <option value="eth">eth</option>
@@ -274,20 +283,12 @@ export default function Home() {
             </select>
 
             <label className="small">Type:</label>
-            <select
-              className="input"
-              value={type}
-              onChange={(e) => setType(e.target.value as any)}
-            >
+            <select className="input" value={type} onChange={(e) => setType(e.target.value as any)}>
               <option value="token">token</option>
               <option value="wallet">wallet</option>
             </select>
 
-            <button
-              className="btn btn-primary"
-              disabled={!input || loading}
-              onClick={run}
-            >
+            <button className="btn btn-primary" disabled={!input || loading} onClick={run}>
               {loading ? "Checking..." : "Check risk"}
             </button>
           </div>
@@ -305,16 +306,16 @@ export default function Home() {
           <>
             <div style={{ height: 14 }} />
 
+            {/* 2 cards grid: Summary + WHY */}
             <div className="grid">
+              {/* Summary card */}
               <div className="card">
                 <div className="row" style={{ justifyContent: "space-between" }}>
                   <div>
                     <div className="small">Chain</div>
-                    <div style={{ fontWeight: 900, fontSize: 18 }}>
-                      {data.chain.toUpperCase()}
-                    </div>
+                    <div style={{ fontWeight: 900, fontSize: 18 }}>{data.chain.toUpperCase()}</div>
                   </div>
-                  <RiskBadge level={data.risk.level} />
+                  <RiskBadge level={(data.risk.level as any) ?? "LOW"} />
                 </div>
 
                 <hr />
@@ -322,97 +323,33 @@ export default function Home() {
                 <div className="row" style={{ justifyContent: "space-between" }}>
                   <div>
                     <div className="small">Risk score</div>
-                    <div style={{ fontWeight: 900, fontSize: 28 }}>
-                      {data.risk.score} / 100
-                    </div>
+                    <div style={{ fontWeight: 900, fontSize: 28 }}>{data.risk.score} / 100</div>
                   </div>
+
                   <div>
                     <div className="small">Confidence</div>
-                    <div style={{ fontWeight: 900 }}>
-                      {data.risk.confidence}
-                    </div>
+                    <div style={{ fontWeight: 900 }}>{data.risk.confidence}</div>
                     <div className="small">Mode: {data.risk.mode}</div>
                   </div>
                 </div>
               </div>
 
-              {(() => {
-  const vLevel = verdictFromScore(data.risk.score);
-  const v = VERDICT_COPY[vLevel];
-
-  const topSignals = [...data.signals]
-    .sort((a, b) => (b.weight || 0) - (a.weight || 0))
-    .slice(0, 2)
-    .map((s) => s.label);
-
-  const url =
-    typeof window !== "undefined"
-      ? window.location.href
-      : "https://pump-guard-azure.vercel.app/";
-
-  const tweet = toTweetText({
-    chain: data.chain,
-    score: data.risk.score,
-    level: vLevel,
-    confidence: data.risk.confidence,
-    mode: data.risk.mode,
-    topSignals,
-    url,
-  });
-
-  return (
-    <>
-      <hr />
-      <div style={{ fontWeight: 900, marginBottom: 6 }}>VERDICT</div>
-      <div style={{ fontWeight: 800 }}>{v.headline}</div>
-
-      <div style={{ height: 8 }} />
-      <div className="small" style={{ display: "grid", gap: 4 }}>
-        {v.bullets.map((t) => (
-          <div key={t}>• {t}</div>
-        ))}
-      </div>
-
-      <div style={{ height: 10 }} />
-      <div className="small">
-        <b>Suggested action:</b> {v.action}
-      </div>
-
-      <div style={{ height: 12 }} />
-      <div className="row" style={{ gap: 10 }}>
-        <a
-          className="btn btn-primary"
-          href={makeXIntentUrl(tweet)}
-          target="_blank"
-          rel="noreferrer"
-        >
-          Share on X
-        </a>
-        <div className="small" style={{ opacity: 0.8 }}>
-          You control what you share.
-        </div>
-      </div>
-    </>
-  );
-})()}
+              {/* WHY card */}
               <div className="card">
                 <div style={{ fontWeight: 900 }}>WHY (signals)</div>
                 <hr />
                 <div style={{ display: "grid", gap: 10 }}>
-                  {data.signals.map((s) => (
+                  {(data.signals ?? []).map((s) => (
                     <div key={s.id} className="card" style={{ padding: 12 }}>
                       <div style={{ fontWeight: 800 }}>{s.label}</div>
                       <div className="small">
                         Weight: <b>{s.weight}</b>
                         {s.value ? ` • ${s.value}` : ""}
                       </div>
+
                       {Array.isArray(s.proof) && s.proof.length > 0 && (
                         <div className="small">
-                          <a
-                            href={s.proof[0]}
-                            target="_blank"
-                            rel="noreferrer"
-                          >
+                          <a href={s.proof[0]} target="_blank" rel="noreferrer">
                             Proof link
                           </a>
                         </div>
@@ -423,19 +360,191 @@ export default function Home() {
               </div>
             </div>
 
-            {/* ---------- Breakdown ---------- */}
+            {/* VERDICT card (separate, to avoid layout breaks) */}
+            <div style={{ height: 14 }} />
+            <div className="card">
+              {(() => {
+                const vLevel = verdictFromScore(data.risk.score);
+                const v = VERDICT_COPY[vLevel];
+
+                const topSignals = [...(data.signals ?? [])]
+                  .sort((a, b) => (b.weight || 0) - (a.weight || 0))
+                  .slice(0, 2)
+                  .map((s) => s.label);
+
+                const url =
+                  typeof window !== "undefined" ? window.location.href : "https://pump-guard-azure.vercel.app/";
+
+                const tweet = toTweetText({
+                  chain: data.chain,
+                  score: data.risk.score,
+                  level: vLevel,
+                  confidence: data.risk.confidence,
+                  mode: data.risk.mode,
+                  topSignals,
+                  url,
+                });
+
+                return (
+                  <>
+                    <div className="row" style={{ justifyContent: "space-between" }}>
+                      <div style={{ fontWeight: 900 }}>VERDICT</div>
+                      <RiskBadge level={vLevel} />
+                    </div>
+
+                    <div style={{ height: 8 }} />
+                    <div style={{ fontWeight: 800 }}>{v.headline}</div>
+
+                    <div style={{ height: 10 }} />
+                    <div className="small" style={{ display: "grid", gap: 4 }}>
+                      {v.bullets.map((t) => (
+                        <div key={t}>• {t}</div>
+                      ))}
+                    </div>
+
+                    <div style={{ height: 10 }} />
+                    <div className="small">
+                      <b>Suggested action:</b> {v.action}
+                    </div>
+
+                    <div style={{ height: 12 }} />
+                    <div className="row" style={{ gap: 10 }}>
+                      <a className="btn btn-primary" href={makeXIntentUrl(tweet)} target="_blank" rel="noreferrer">
+                        Share on X
+                      </a>
+                      <div className="small" style={{ opacity: 0.8 }}>
+                        You control what you share.
+                      </div>
+                    </div>
+                  </>
+                );
+              })()}
+            </div>
+
+            {/* Community flags card */}
+            <div style={{ height: 14 }} />
+            <div className="card">
+              <div className="row" style={{ justifyContent: "space-between" }}>
+                <div style={{ fontWeight: 900 }}>COMMUNITY FLAGS</div>
+                {target ? (
+                  <div className="small" style={{ opacity: 0.8 }}>
+                    Target: {target.target_type} • {target.chain.toUpperCase()}
+                  </div>
+                ) : (
+                  <div className="small" style={{ opacity: 0.8 }}>Target: —</div>
+                )}
+              </div>
+
+              <hr />
+
+              {flagErr && (
+                <div className="small" style={{ marginBottom: 10 }}>
+                  <b>Error:</b> {flagErr}
+                </div>
+              )}
+
+              <div className="row" style={{ gap: 14, flexWrap: "wrap" }}>
+                <div className="badge">🔴 RUGGED: <b>{flags?.rugged ?? 0}</b></div>
+                <div className="badge">🟡 SUS: <b>{flags?.sus ?? 0}</b></div>
+                <div className="badge">🟢 TRUSTED: <b>{flags?.trusted ?? 0}</b></div>
+              </div>
+
+              <div style={{ height: 12 }} />
+
+              <div className="small" style={{ marginBottom: 6 }}>
+                Optional reason (shown in recent activity):
+              </div>
+              <input
+                className="input"
+                placeholder="e.g. dev dumped supply, LP pulled, obvious bundling..."
+                value={flagReason}
+                onChange={(e) => setFlagReason(e.target.value)}
+              />
+
+              <div style={{ height: 10 }} />
+
+              <div className="row" style={{ gap: 10, flexWrap: "wrap" }}>
+                <button
+                  className="btn"
+                  disabled={!target || flagLoading !== ""}
+                  onClick={() => submitFlag("RUGGED")}
+                >
+                  {flagLoading === "RUGGED" ? "Voting..." : "Vote RUGGED"}
+                </button>
+                <button
+                  className="btn"
+                  disabled={!target || flagLoading !== ""}
+                  onClick={() => submitFlag("SUS")}
+                >
+                  {flagLoading === "SUS" ? "Voting..." : "Vote SUS"}
+                </button>
+                <button
+                  className="btn"
+                  disabled={!target || flagLoading !== ""}
+                  onClick={() => submitFlag("TRUSTED")}
+                >
+                  {flagLoading === "TRUSTED" ? "Voting..." : "Vote TRUSTED"}
+                </button>
+
+                <button className="btn" disabled={!target} onClick={fetchFlags}>
+                  Refresh
+                </button>
+              </div>
+
+              <div style={{ height: 14 }} />
+              <div style={{ fontWeight: 900, marginBottom: 6 }}>Recent activity</div>
+
+              <div style={{ display: "grid", gap: 8 }}>
+                {(flags?.recent ?? []).slice(0, 10).map((r, idx) => (
+                  <div key={`${r.ts}-${idx}`} className="card" style={{ padding: 12 }}>
+                    <div className="row" style={{ justifyContent: "space-between" }}>
+                      <div style={{ fontWeight: 800 }}>
+                        {r.type === "RUGGED" ? "🔴 RUGGED" : r.type === "SUS" ? "🟡 SUS" : "🟢 TRUSTED"}
+                      </div>
+                      <div className="small" style={{ opacity: 0.8 }}>
+                        {new Date(r.ts).toLocaleString()}
+                      </div>
+                    </div>
+                    {r.reason ? (
+                      <div className="small" style={{ marginTop: 6 }}>
+                        {r.reason}
+                      </div>
+                    ) : (
+                      <div className="small" style={{ marginTop: 6, opacity: 0.7 }}>
+                        (no reason)
+                      </div>
+                    )}
+                  </div>
+                ))}
+
+                {(flags?.recent ?? []).length === 0 && (
+                  <div className="small" style={{ opacity: 0.8 }}>
+                    No votes yet.
+                  </div>
+                )}
+              </div>
+
+              {flags?.note && (
+                <>
+                  <div style={{ height: 10 }} />
+                  <div className="small" style={{ opacity: 0.8 }}>
+                    Note: {flags.note}
+                  </div>
+                </>
+              )}
+            </div>
+
+            {/* Risk breakdown */}
             <div style={{ height: 14 }} />
             <div className="card">
               <b>Risk breakdown</b>
               <hr />
-              {Object.entries(sumByCategory(data.signals)).map(
-                ([k, v]) => (
-                  <div key={k} className="row">
-                    <span>{k}</span>
-                    <b>{Math.round(v)}</b>
-                  </div>
-                )
-              )}
+              {Object.entries(sumByCategory(data.signals ?? [])).map(([k, v]) => (
+                <div key={k} className="row">
+                  <span>{k}</span>
+                  <b>{Math.round(v)}</b>
+                </div>
+              ))}
             </div>
           </>
         )}
