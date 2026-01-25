@@ -536,16 +536,32 @@ export default function Home() {
 
             {/* Risk breakdown */}
             <div style={{ height: 14 }} />
-            <div className="card">
-              <b>Risk breakdown</b>
-              <hr />
-              {Object.entries(sumByCategory(data.signals ?? [])).map(([k, v]) => (
-                <div key={k} className="row">
-                  <span>{k}</span>
-                  <b>{Math.round(v)}</b>
-                </div>
-              ))}
-            </div>
+<div className="card">
+  <b>Risk breakdown</b>
+  <hr />
+
+  {(() => {
+    const breakdown = sumByCategory(data.signals);
+    const entries = Object.entries(breakdown).filter(
+      ([_, v]) => Math.round(v) > 0
+    );
+
+    if (entries.length === 0) {
+      return (
+        <div className="small" style={{ opacity: 0.8 }}>
+          No significant risk factors detected
+        </div>
+      );
+    }
+
+    return entries.map(([k, v]) => (
+      <div key={k} className="row">
+        <span>{k}</span>
+        <b>{Math.round(v)}</b>
+      </div>
+    ));
+  })()}
+</div>
           </>
         )}
       </main>
