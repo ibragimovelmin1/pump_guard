@@ -133,6 +133,7 @@ function makeXIntentUrl(text: string) {
 
 export default function Home() {
   const [input, setInput] = useState("");
+  const [showWhy, setShowWhy] = useState(true);
   const [chain, setChain] = useState<ChainAuto>("auto");
   const [type, setType] = useState<"token" | "wallet">("token");
 
@@ -336,20 +337,27 @@ export default function Home() {
 
               {/* WHY card */}
               <div className="card">
-                <div style={{ fontWeight: 900 }}>WHY (signals)</div>
-                <hr />
-                <div style={{ display: "grid", gap: 10 }}>
-                  {(data.signals ?? []).map((s) => (
-                    <div key={s.id} className="card" style={{ padding: 12 }}>
-                      <div style={{ fontWeight: 800 }}>{s.label}</div>
-                      <div className="small">
-                        Weight: <b>{s.weight}</b>
-                        {s.value ? ` • ${s.value}` : ""}
-                      </div>
+  <div style={{ fontWeight: 900 }}>WHY (signals)</div>
+  <hr />
 
-                      {Array.isArray(s.proof) && s.proof.length > 0 && (
-                        <div className="small">
-                          <a href={s.proof[0]} target="_blank" rel="noreferrer">
+  {(data.signals?.length ?? 0) === 0 ? (
+    <div className="small" style={{ opacity: 0.7 }}>
+      No significant on-chain signals detected
+    </div>
+  ) : (
+    <div style={{ display: "grid", gap: 10 }}>
+      {data.signals.map((s) => (
+        <div key={s.id} className="card" style={{ padding: 12 }}>
+          <div style={{ fontWeight: 800 }}>{s.label}</div>
+
+          <div className="small">
+            Weight: <b>{s.weight}</b>
+            {s.value ? ` • ${s.value}` : ""}
+          </div>
+
+          {Array.isArray(s.proof) && s.proof.length > 0 && (
+            <div className="small">
+              <a href={s.proof[0]} target="_blank" rel="noreferrer">
                             Proof link
                           </a>
                         </div>
@@ -357,7 +365,7 @@ export default function Home() {
                     </div>
                   ))}
                 </div>
-              </div>
+              )}</div>
             </div>
 
             {/* VERDICT card (separate, to avoid layout breaks) */}
@@ -535,9 +543,21 @@ export default function Home() {
             </div>
 
             {/* Risk breakdown */}
-            <div style={{ height: 14 }} />
+<div style={{ height: 14 }} />
+
 <div className="card">
-  <b>Risk breakdown</b>
+  <div
+    className="row"
+    style={{ justifyContent: "space-between", cursor: "pointer" }}
+    onClick={() => setShowWhy((v) => !v)}
+    title="Toggle WHY (signals)"
+  >
+    <b>Risk breakdown</b>
+    <span className="small" style={{ opacity: 0.8 }}>
+      {showWhy ? "Hide WHY" : "Show WHY"}
+    </span>
+  </div>
+
   <hr />
 
   {(() => {
