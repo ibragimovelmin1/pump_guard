@@ -5,9 +5,7 @@ import type {
   Signal,
   Chain,
   Confidence,
-  RiskLevel,
-  TopHolder,
-  DevHistory
+  RiskLevel
 } from "../../lib/types";
 import { normalizeChain } from "../../lib/detect";
 import { explorerAddress, explorerToken } from "../../lib/explorer";
@@ -51,6 +49,102 @@ function levelFromScore(score: number): RiskLevel {
   return "LOW";
 }
 
+/**
+ * Risk model (caps):
+ * PERMISSIONS        max 10
+ * DISTRIBUTION       max 30
+ * LIQUIDITY (LP)     max 10
+ * DEV / CONTRACT     max 30
+ * TX PATTERNS        max 20
+ * CONTEXT            0 (info only)
+ */
+type RiskCategory =
+  | "PERMISSIONS"
+  | "DISTRIBUTION"
+  | "LIQUIDITY"
+  | "DEV_CONTRACT"
+  | "TX_PATTERNS"
+  | "CONTEXT";
+
+const CATEGORY_MAX: Record<RiskCategory, number> = {
+  PERMISSIONS: 10,
+  DISTRIBUTION: 30,
+  LIQUIDITY: 10,
+  DEV_CONTRACT: 30,
+  TX_PATTERNS: 20,
+  CONTEXT: 0
+};
+
+function categorizeSignalId(id: string): RiskCategory {
+  // PERMISSIONS
+  if (id === "MINT_AUTHORITY_PRESENT" || id === "FREEZE_AUTHORITY_PRESENT")
+    return "PERMISSIONS";
+
+  // DISTRIBUTION
+  if (id.startsWith("TOP10_") || id.startsWith("DEV_HOLDS_"))
+    return "DISTRIBUTION";
+
+  // LIQUIDITY
+  if (id.startsWith("LP_")) return "LIQUIDITY";
+
+  // DEV / CONTRACT
+  if (
+    id.startsWith("BLACKLIST_") ||
+    id.startsWith("TAX_") ||
+    id.startsWith("TRANSFER_") ||
+    id.startsWith("HOOKS_") ||
+    id.startsWith("NONSTANDARD_")
+  )
+    return "DEV_CONTRACT";
+
+  // TX PATTERNS
+  if (
+    id.startsWith("DEV_DUMP_") ||
+    id.startsWith("BUNDLED_") ||
+    id.startsWith("MEV_") ||
+    id.startsWith("CLUSTER_")
+  )
+    return "TX_PATTERNS";
+
+  // CONTEXT (info only)
+  if (
+    id.startsWith("TOKEN_AGE_") ||
+    id.startsWith("DEV_") || // DEV_CANDIDATE / DEV_UNKNOWN / DEV_EARLY_SIGNER etc
+    id.startsWith("CONTEXT_")
+  )
+    return "CONTEXT";
+
+  // fallback: treat unknown as CONTEXT (won't affect score)
+  return "CONTEXT";
+}
+
+/** Apply category caps to signal weights (keeps your UI "signals" list intact) */
+function computeScoreWithCaps(signals: Signal[]) {
+  const totals: Record<RiskCategory, number> = {
+    PERMISSIONS: 0,
+    DISTRIBUTION: 0,
+    LIQUIDITY: 0,
+    DEV_CONTRACT: 0,
+    TX_PATTERNS: 0,
+    CONTEXT: 0
+  };
+
+  for (const s of signals) {
+    const cat = categorizeSignalId(String((s as any).id || ""));
+    const w = Number((s as any).weight) || 0;
+    totals[cat] += w;
+  }
+
+  // cap each category
+  let score = 0;
+  (Object.keys(totals) as RiskCategory[]).forEach(cat => {
+    const capped = clamp(totals[cat], 0, CATEGORY_MAX[cat]);
+    score += capped;
+  });
+
+  return clamp(score, 0, 100);
+}
+
 /* =========================================================
    Types
    ========================================================= */
@@ -63,7 +157,6 @@ type SolTokenMeta = {
   dev_candidate?: string;
   mint_authority_present?: boolean;
   freeze_authority_present?: boolean;
-  dev_top10_hold_percent?: number;
 };
 
 type HeliusTx = {
@@ -138,8 +231,7 @@ async function detectEarliestSigner(
 
   const keys: any[] = (tx.transaction.message as any).accountKeys || [];
   const signer = keys.find(k => k.signer);
-  const signerStr =
-    signer?.pubkey?.toString?.() || signer?.toString?.();
+  const signerStr = signer?.pubkey?.toString?.() || signer?.toString?.();
 
   return signerStr
     ? { signer: signerStr, proofSig: sig, launchTs }
@@ -156,19 +248,19 @@ async function solTokenSignals(
 ): Promise<{ signals: Signal[]; meta: SolTokenMeta; launchTs?: number }> {
   const signals: Signal[] = [];
 
-  // helper: normalize weight/proof to avoid "0 almost всегда" из-за типов/undefined
+  // helper: normalize proof
   const addSignal = (s: Signal) => {
     signals.push({
       ...s,
       weight: Number((s as any).weight) || 0,
-      proof: Array.isArray((s as any).proof) ? (s as any).proof : [],
+      proof: Array.isArray((s as any).proof) ? (s as any).proof : []
     } as any);
   };
 
   const meta: SolTokenMeta = {};
   const mintPk = new PublicKey(mint);
 
-  /* ---------- Mint authorities ---------- */
+  /* ---------- Mint authorities (PERMISSIONS max 10) ---------- */
 
   const mintAcc = await conn.getParsedAccountInfo(mintPk);
   const parsed: any = (mintAcc.value?.data as any)?.parsed;
@@ -180,13 +272,14 @@ async function solTokenSignals(
   meta.mint_authority_present = Boolean(mintAuth);
   meta.freeze_authority_present = Boolean(freezeAuth);
 
+  // NEW MODEL: mint +5, freeze +5
   if (mintAuth) {
     addSignal({
       id: "MINT_AUTHORITY_PRESENT",
       label: "Mint authority is still present (supply can be increased)",
       value: mintAuth,
-      weight: 10,
-      proof: [explorerToken("sol", mint)],
+      weight: 5,
+      proof: [explorerToken("sol", mint)]
     } as any);
   }
 
@@ -195,176 +288,167 @@ async function solTokenSignals(
       id: "FREEZE_AUTHORITY_PRESENT",
       label: "Freeze authority is present (accounts can be frozen)",
       value: freezeAuth,
-      weight: 6,
-      proof: [explorerToken("sol", mint)],
+      weight: 5,
+      proof: [explorerToken("sol", mint)]
     } as any);
   }
 
+  /* ---------- Supply & holders (DISTRIBUTION max 30) ---------- */
 
-  /* ---------- Supply & holders ---------- */
+  const supply = await conn.getTokenSupply(mintPk);
+  const supplyUi = supply.value.uiAmount ?? null;
+  meta.supply_ui = supplyUi ?? undefined;
 
-const supply = await conn.getTokenSupply(mintPk);
-const supplyUi = supply.value.uiAmount ?? null;
-meta.supply_ui = supplyUi ?? undefined;
+  const largest = await conn.getTokenLargestAccounts(mintPk);
+  const top = largest.value.slice(0, 10);
 
-const largest = await conn.getTokenLargestAccounts(mintPk);
-const top = largest.value.slice(0, 10);
+  let topSum = 0;
+  for (const a of top) topSum += a.uiAmount ?? 0;
 
-let topSum = 0;
-for (const a of top) topSum += a.uiAmount ?? 0;
+  const top10Percent =
+    supplyUi && supplyUi > 0 ? (topSum / supplyUi) * 100 : undefined;
 
-const top10Percent =
-  supplyUi && supplyUi > 0 ? (topSum / supplyUi) * 100 : undefined;
+  meta.top10_percent = top10Percent;
+  meta.holders = largest.value.length;
 
-meta.top10_percent = top10Percent;
-meta.holders = largest.value.length;
-
-if (typeof top10Percent === "number") {
-  if (top10Percent > 80) {
-    signals.push({
-      id: "TOP10_GT_80",
-      label: "Top holders concentration is extreme",
-      value: `top10=${top10Percent.toFixed(1)}%`,
-      weight: 18,
-      proof: [explorerToken("sol", mint)],
-    });
-  } else if (top10Percent > 60) {
-    signals.push({
-      id: "TOP10_GT_60",
-      label: "Top holders concentration is high",
-      value: `top10=${top10Percent.toFixed(1)}%`,
-      weight: 10,
-      proof: [explorerToken("sol", mint)],
-    });
-  } else if (top10Percent > 40) {
-    signals.push({
-      id: "TOP10_GT_40",
-      label: "Top holders concentration is elevated",
-      value: `top10=${top10Percent.toFixed(1)}%`,
-      weight: 6,
-      proof: [explorerToken("sol", mint)],
-    });
-  }
-}
-
- /* ---------- Age ---------- */
-
-try {
-  // RPC часто ограничивает/тормозит большие лимиты — 200 достаточно для "очень новый"
-  const sigs = await conn.getSignaturesForAddress(mintPk, { limit: 200 });
-
-  if (sigs.length > 0) {
-    const oldest = sigs[sigs.length - 1];
-    let bt = oldest.blockTime ?? null;
-
-    // На некоторых RPC blockTime может быть null — пробуем достать через slot
-    if (!bt && oldest.slot) {
-      bt = await conn.getBlockTime(oldest.slot);
+  // NEW MODEL: 80% -> +15, 60% -> +10, 40% -> +5 (mutually exclusive)
+  if (typeof top10Percent === "number") {
+    if (top10Percent > 80) {
+      addSignal({
+        id: "TOP10_GT_80",
+        label: "Top holders concentration is extreme",
+        value: `top10=${top10Percent.toFixed(1)}%`,
+        weight: 15,
+        proof: [explorerToken("sol", mint)]
+      } as any);
+    } else if (top10Percent > 60) {
+      addSignal({
+        id: "TOP10_GT_60",
+        label: "Top holders concentration is high",
+        value: `top10=${top10Percent.toFixed(1)}%`,
+        weight: 10,
+        proof: [explorerToken("sol", mint)]
+      } as any);
+    } else if (top10Percent > 40) {
+      addSignal({
+        id: "TOP10_GT_40",
+        label: "Top holders concentration is elevated",
+        value: `top10=${top10Percent.toFixed(1)}%`,
+        weight: 5,
+        proof: [explorerToken("sol", mint)]
+      } as any);
     }
+  }
 
-    if (bt) {
-      const now = Math.floor(Date.now() / 1000);
-      const ageSeconds = Math.max(0, now - bt);
-      meta.age_seconds = ageSeconds;
+  /* ---------- LP (LIQUIDITY max 10) ---------- */
+  // Variant A: unknown -> 0 points, but show info in WHY
+  // Real LP detection (Raydium/Orca/Meteora) will later add:
+  // - LP_NOT_BURNED -> +10
+  // - LP_BURNED_LOCKED_100 -> +0 (optional info)
+  addSignal({
+    id: "LP_STATUS_UNKNOWN",
+    label: "LP status unknown (not detected yet)",
+    value: "",
+    weight: 0,
+    proof: [explorerToken("sol", mint)]
+  } as any);
 
-      // < 1h
-      if (ageSeconds < 3600) {
-        addSignal({
-          id: "TOKEN_AGE_LT_1H",
-          label: "Token is very new (<1h)",
-          value: `${Math.max(1, Math.floor(ageSeconds / 60))}m`,
-          weight: 8,
-          proof: [explorerToken("sol", mint)],
-        } as any);
+  /* ---------- Age (CONTEXT only, weight 0) ---------- */
 
-        // 1–6h
-      } else if (ageSeconds < 21600) {
-        addSignal({
-          id: "TOKEN_AGE_LT_6H",
-          label: "Token is new (1–6h)",
-          value: `${Math.floor(ageSeconds / 3600)}h`,
-          weight: 4,
-          proof: [explorerToken("sol", mint)],
-        } as any);
+  try {
+    const sigs = await conn.getSignaturesForAddress(mintPk, { limit: 200 });
+    if (sigs.length > 0) {
+      const oldest = sigs[sigs.length - 1];
+      let bt = oldest.blockTime ?? null;
+      if (!bt && oldest.slot) bt = await conn.getBlockTime(oldest.slot);
 
-        // 6–24h (чтобы CONTEXT не был нулём почти всегда)
-      } else if (ageSeconds < 86400) {
-        addSignal({
-          id: "TOKEN_AGE_LT_24H",
-          label: "Token is fresh (6–24h)",
-          value: `${Math.floor(ageSeconds / 3600)}h`,
-          weight: 2,
-          proof: [explorerToken("sol", mint)],
-        } as any);
+      if (bt) {
+        const now = Math.floor(Date.now() / 1000);
+        const ageSeconds = Math.max(0, now - bt);
+        meta.age_seconds = ageSeconds;
+
+        if (ageSeconds < 3600) {
+          addSignal({
+            id: "TOKEN_AGE_LT_1H",
+            label: "Token is very new (<1h)",
+            value: `${Math.max(1, Math.floor(ageSeconds / 60))}m`,
+            weight: 0,
+            proof: [explorerToken("sol", mint)]
+          } as any);
+        } else if (ageSeconds < 21600) {
+          addSignal({
+            id: "TOKEN_AGE_LT_6H",
+            label: "Token is new (1–6h)",
+            value: `${Math.floor(ageSeconds / 3600)}h`,
+            weight: 0,
+            proof: [explorerToken("sol", mint)]
+          } as any);
+        } else if (ageSeconds < 86400) {
+          addSignal({
+            id: "TOKEN_AGE_LT_24H",
+            label: "Token is fresh (6–24h)",
+            value: `${Math.floor(ageSeconds / 3600)}h`,
+            weight: 0,
+            proof: [explorerToken("sol", mint)]
+          } as any);
+        }
       }
     }
+  } catch {
+    // age is context only; ignore RPC errors
   }
-} catch (e) {
-  // молча игнорируем: age — не критичный сигнал, RPC может ограничивать запросы
-}
 
- /* ---------- Dev candidate ---------- */
+  /* ---------- Dev candidate (CONTEXT only, weight 0) ---------- */
 
-let signerDev: string | null = null;
-let proofSig: string | undefined;
-let launchTs: number | undefined;
+  let signerDev: string | null = null;
+  let proofSig: string | undefined;
+  let launchTs: number | undefined;
 
-try {
-  const r = await detectEarliestSigner(conn, mintPk);
-  signerDev = r.signer ?? null;
-  proofSig = r.proofSig;
-  launchTs = r.launchTs;
-} catch {}
+  try {
+    const r = await detectEarliestSigner(conn, mintPk);
+    signerDev = r.signer ?? null;
+    proofSig = r.proofSig;
+    launchTs = r.launchTs;
+  } catch {}
 
-const { dev, reason } = await bestDevCandidate(mintAuth, freezeAuth, signerDev);
+  const { dev, reason } = await bestDevCandidate(mintAuth, freezeAuth, signerDev);
 
-// helper: proof url
-const devProof = proofSig
-  ? [`https://solscan.io/tx/${proofSig}`]
-  : [explorerToken("sol", mint)];
+  const devProof = proofSig
+    ? [`https://solscan.io/tx/${proofSig}`]
+    : [explorerToken("sol", mint)];
 
-if (dev) {
-  meta.dev_candidate = dev;
+  if (dev) {
+    meta.dev_candidate = dev;
 
-  // веса: чем слабее источник — тем ниже вес
-  const w =
-    reason === "earliestSigner" ? 12 :
-    reason === "mintAuthority" ? 8 :
-    reason === "freezeAuthority" ? 6 :
-    4; // fallback
+    addSignal({
+      id: "DEV_CANDIDATE",
+      label: `Dev wallet candidate (${reason})`,
+      value: dev,
+      weight: 0, // CONTEXT ONLY
+      proof: devProof
+    } as any);
 
-  // IMPORTANT: id должен начинаться с DEV_CANDIDATE чтобы попасть в CONTEXT в твоём categorizeSignalId
-  signals.push({
-    id: "DEV_CANDIDATE",
-    label: `Dev wallet candidate (${reason})`,
-    value: dev,
-    weight: w,
-    proof: devProof,
-  });
-
-  // Доп. сигнал (dev behavior), если нашли earliest signer
-  if (reason === "earliestSigner" && signerDev) {
-    signals.push({
-      id: "DEV_EARLY_SIGNER",
-      label: "Dev was earliest signer (possible deployer/initiator)",
-      value: signerDev,
-      weight: 6,
-      proof: devProof,
-    });
+    if (reason === "earliestSigner" && signerDev) {
+      addSignal({
+        id: "DEV_EARLY_SIGNER",
+        label: "Dev was earliest signer (possible deployer/initiator)",
+        value: signerDev,
+        weight: 0, // CONTEXT ONLY
+        proof: devProof
+      } as any);
+    }
+  } else {
+    meta.dev_candidate = undefined;
+    addSignal({
+      id: "DEV_UNKNOWN",
+      label: "Dev wallet candidate not found",
+      value: "",
+      weight: 0, // CONTEXT ONLY
+      proof: [explorerToken("sol", mint)]
+    } as any);
   }
-} else {
-  // Чтобы UI/логика не были “пустыми”, если дев не найден
-  meta.dev_candidate = undefined;
-  signals.push({
-    id: "DEV_UNKNOWN",
-    label: "Dev wallet candidate not found",
-    value: "",
-    weight: 2,
-    proof: [explorerToken("sol", mint)],
-  });
-}
 
-return { signals, meta, launchTs };
+  return { signals, meta, launchTs };
 }
 
 /* =========================================================
@@ -387,24 +471,20 @@ export default async function handler(
   if (req.method !== "GET")
     return res.status(405).json({ error: "Method not allowed" });
 
-  const input = (req.query.input as string || "").trim();
+  const input = ((req.query.input as string) || "").trim();
   if (!input) return res.status(400).json({ error: "Missing input" });
 
-  const chain = normalizeChain(
-    (req.query.chain as ChainAuto) || "auto",
-    input
-  );
+  const chain = normalizeChain((req.query.chain as ChainAuto) || "auto", input);
 
   let signals: Signal[] = [];
-  let score = 10;
+  let score = 0; // NEW: no base points
   let confidence: Confidence = "LOW";
   let mode: "LIVE" | "DEMO" = "DEMO";
 
   try {
     if (chain === "sol") {
       const rpc =
-        process.env.SOLANA_RPC_URL ||
-        "https://api.mainnet-beta.solana.com";
+        process.env.SOLANA_RPC_URL || "https://api.mainnet-beta.solana.com";
       const conn = new Connection(rpc, "confirmed");
 
       mode = "LIVE";
@@ -413,8 +493,8 @@ export default async function handler(
       const r = await solTokenSignals(conn, input);
       signals.push(...r.signals);
 
-      for (const s of signals) score += s.weight;
-      score = clamp(score, 0, 100);
+      // NEW: compute using category caps (CONTEXT=0)
+      score = computeScoreWithCaps(signals);
 
       if (
         r.meta.age_seconds &&
@@ -438,9 +518,7 @@ export default async function handler(
         dev: r.meta.dev_candidate
           ? {
               address: r.meta.dev_candidate,
-              links: {
-                explorer: explorerAddress("sol", r.meta.dev_candidate)
-              }
+              links: { explorer: explorerAddress("sol", r.meta.dev_candidate) }
             }
           : undefined,
         risk: {
@@ -462,7 +540,7 @@ export default async function handler(
       label: "Live scoring failed, falling back to demo",
       value: String(e?.message || e),
       weight: 0
-    });
+    } as any);
   }
 
   /* ---------- DEMO fallback ---------- */
@@ -471,7 +549,7 @@ export default async function handler(
     id: "DEMO_MODE",
     label: "Demo mode (missing RPC or API keys)",
     weight: 0
-  });
+  } as any);
 
   const response: ScoreResponse = {
     chain: chain as Chain,
