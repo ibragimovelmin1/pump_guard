@@ -33,10 +33,31 @@ type FlagsResp = {
 type SignalCategory = "PERMISSIONS" | "DISTRIBUTION" | "DEV_BEHAVIOR" | "CONTEXT" | "OTHER";
 
 function categorizeSignalId(id: string): SignalCategory {
-  if (id.includes("MINT_AUTHORITY") || id.includes("FREEZE_AUTHORITY")) return "PERMISSIONS";
-  if (id.startsWith("TOP10_") || id.startsWith("DEV_TOP_HOLDER")) return "DISTRIBUTION";
-  if (id.startsWith("DEV_EARLY_") || id.startsWith("HELIUS_")) return "DEV_BEHAVIOR";
-  if (id.startsWith("TOKEN_AGE") || id.startsWith("DEV_CANDIDATE") || id === "DEV_UNKNOWN") return "CONTEXT";
+  const x = String(id || "").toUpperCase();
+
+  // PERMISSIONS
+  if (x.includes("MINT_AUTHORITY") || x.includes("FREEZE_AUTHORITY")) return "PERMISSIONS";
+
+  // DISTRIBUTION
+  // покрывает: TOP10_GT_60, TOP10_GT_80, TOP10_*, DEV_TOP_HOLDER, *TOP_HOLDER*
+  if (x.startsWith("TOP10_") || x.startsWith("DEV_TOP_HOLDER") || x.includes("TOP_HOLDER"))
+    return "DISTRIBUTION";
+
+  // DEV_BEHAVIOR
+  // покрывает: DEV_EARLY_SIGNER, DEV_EARLY_*, HELIUS_*
+  if (x.startsWith("DEV_EARLY") || x.startsWith("HELIUS_")) return "DEV_BEHAVIOR";
+
+  // CONTEXT
+  // покрывает: TOKEN_AGE_*, DEV_CANDIDATE, DEV_CANDIDATE_*, DEV_UNKNOWN, HOLDERS_*
+  if (
+    x.startsWith("TOKEN_AGE") ||
+    x.startsWith("DEV_CANDIDATE") ||
+    x === "DEV_UNKNOWN" ||
+    x.startsWith("HOLDERS_")
+  ) {
+    return "CONTEXT";
+  }
+
   return "OTHER";
 }
 

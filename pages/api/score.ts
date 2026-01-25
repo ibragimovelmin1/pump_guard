@@ -155,6 +155,16 @@ async function solTokenSignals(
   mint: string
 ): Promise<{ signals: Signal[]; meta: SolTokenMeta; launchTs?: number }> {
   const signals: Signal[] = [];
+
+  // helper: normalize weight/proof to avoid "0 almost всегда" из-за типов/undefined
+  const addSignal = (s: Signal) => {
+    signals.push({
+      ...s,
+      weight: Number((s as any).weight) || 0,
+      proof: Array.isArray((s as any).proof) ? (s as any).proof : [],
+    } as any);
+  };
+
   const meta: SolTokenMeta = {};
   const mintPk = new PublicKey(mint);
 
@@ -171,131 +181,182 @@ async function solTokenSignals(
   meta.freeze_authority_present = Boolean(freezeAuth);
 
   if (mintAuth) {
-    signals.push({
+    addSignal({
       id: "MINT_AUTHORITY_PRESENT",
       label: "Mint authority is still present (supply can be increased)",
       value: mintAuth,
       weight: 10,
-      proof: [explorerToken("sol", mint)]
-    });
+      proof: [explorerToken("sol", mint)],
+    } as any);
   }
 
   if (freezeAuth) {
-    signals.push({
+    addSignal({
       id: "FREEZE_AUTHORITY_PRESENT",
       label: "Freeze authority is present (accounts can be frozen)",
       value: freezeAuth,
       weight: 6,
-      proof: [explorerToken("sol", mint)]
-    });
+      proof: [explorerToken("sol", mint)],
+    } as any);
   }
+
 
   /* ---------- Supply & holders ---------- */
 
-  const supply = await conn.getTokenSupply(mintPk);
-  const supplyUi = supply.value.uiAmount ?? null;
-  meta.supply_ui = supplyUi ?? undefined;
+const supply = await conn.getTokenSupply(mintPk);
+const supplyUi = supply.value.uiAmount ?? null;
+meta.supply_ui = supplyUi ?? undefined;
 
-  const largest = await conn.getTokenLargestAccounts(mintPk);
-  const top = largest.value.slice(0, 10);
+const largest = await conn.getTokenLargestAccounts(mintPk);
+const top = largest.value.slice(0, 10);
 
-  let topSum = 0;
-  for (const a of top) topSum += a.uiAmount ?? 0;
+let topSum = 0;
+for (const a of top) topSum += a.uiAmount ?? 0;
 
-  const top10Percent =
-    supplyUi && supplyUi > 0 ? (topSum / supplyUi) * 100 : undefined;
+const top10Percent =
+  supplyUi && supplyUi > 0 ? (topSum / supplyUi) * 100 : undefined;
 
-  meta.top10_percent = top10Percent;
-  meta.holders = largest.value.length;
+meta.top10_percent = top10Percent;
+meta.holders = largest.value.length;
 
-  if (typeof top10Percent === "number") {
-    if (top10Percent > 80) {
-      signals.push({
-        id: "TOP10_GT_80",
-        label: "Top holders concentration is extreme",
-        value: `top10=${top10Percent.toFixed(1)}%`,
-        weight: 18,
-        proof: [explorerToken("sol", mint)]
-      });
-    } else if (top10Percent > 60) {
-      signals.push({
-        id: "TOP10_GT_60",
-        label: "Top holders concentration is high",
-        value: `top10=${top10Percent.toFixed(1)}%`,
-        weight: 10,
-        proof: [explorerToken("sol", mint)]
-      });
-    }
+if (typeof top10Percent === "number") {
+  if (top10Percent > 80) {
+    addSignal({
+      id: "TOP10_GT_80",
+      label: "Top holders concentration is extreme",
+      value: `top10=${top10Percent.toFixed(1)}%`,
+      weight: 18,
+      proof: [explorerToken("sol", mint)],
+    } as any);
+  } else if (top10Percent > 60) {
+    addSignal({
+      id: "TOP10_GT_60",
+      label: "Top holders concentration is high",
+      value: `top10=${top10Percent.toFixed(1)}%`,
+      weight: 10,
+      proof: [explorerToken("sol", mint)],
+    } as any);
   }
+}
 
-  /* ---------- Age ---------- */
+ /* ---------- Age ---------- */
 
-  const sigs = await conn.getSignaturesForAddress(mintPk, { limit: 1000 });
+try {
+  // RPC часто ограничивает/тормозит большие лимиты — 200 достаточно для "очень новый"
+  const sigs = await conn.getSignaturesForAddress(mintPk, { limit: 200 });
+
   if (sigs.length > 0) {
     const oldest = sigs[sigs.length - 1];
     let bt = oldest.blockTime ?? null;
-    if (!bt && oldest.slot) bt = await conn.getBlockTime(oldest.slot);
+
+    // На некоторых RPC blockTime может быть null — пробуем достать через slot
+    if (!bt && oldest.slot) {
+      bt = await conn.getBlockTime(oldest.slot);
+    }
 
     if (bt) {
-      const ageSeconds = Math.max(
-        0,
-        Math.floor(Date.now() / 1000) - bt
-      );
+      const now = Math.floor(Date.now() / 1000);
+      const ageSeconds = Math.max(0, now - bt);
       meta.age_seconds = ageSeconds;
 
+      // < 1h
       if (ageSeconds < 3600) {
-        signals.push({
+        addSignal({
           id: "TOKEN_AGE_LT_1H",
           label: "Token is very new (<1h)",
-          value: `${Math.floor(ageSeconds / 60)}m`,
+          value: `${Math.max(1, Math.floor(ageSeconds / 60))}m`,
           weight: 8,
-          proof: [explorerToken("sol", mint)]
-        });
+          proof: [explorerToken("sol", mint)],
+        } as any);
+
+        // 1–6h
       } else if (ageSeconds < 21600) {
-        signals.push({
+        addSignal({
           id: "TOKEN_AGE_LT_6H",
           label: "Token is new (1–6h)",
           value: `${Math.floor(ageSeconds / 3600)}h`,
           weight: 4,
-          proof: [explorerToken("sol", mint)]
-        });
+          proof: [explorerToken("sol", mint)],
+        } as any);
+
+        // 6–24h (чтобы CONTEXT не был нулём почти всегда)
+      } else if (ageSeconds < 86400) {
+        addSignal({
+          id: "TOKEN_AGE_LT_24H",
+          label: "Token is fresh (6–24h)",
+          value: `${Math.floor(ageSeconds / 3600)}h`,
+          weight: 2,
+          proof: [explorerToken("sol", mint)],
+        } as any);
       }
     }
   }
+} catch (e) {
+  // молча игнорируем: age — не критичный сигнал, RPC может ограничивать запросы
+}
 
-  /* ---------- Dev candidate ---------- */
+ /* ---------- Dev candidate ---------- */
 
-  let signerDev: string | null = null;
-  let proofSig: string | undefined;
-  let launchTs: number | undefined;
+let signerDev: string | null = null;
+let proofSig: string | undefined;
+let launchTs: number | undefined;
 
-  try {
-    const r = await detectEarliestSigner(conn, mintPk);
-    signerDev = r.signer ?? null;
-    proofSig = r.proofSig;
-    launchTs = r.launchTs;
-  } catch {}
+try {
+  const r = await detectEarliestSigner(conn, mintPk);
+  signerDev = r.signer ?? null;
+  proofSig = r.proofSig;
+  launchTs = r.launchTs;
+} catch {}
 
-  const { dev, reason } = await bestDevCandidate(
-    mintAuth,
-    freezeAuth,
-    signerDev
-  );
+const { dev, reason } = await bestDevCandidate(mintAuth, freezeAuth, signerDev);
 
-  if (dev) {
-    meta.dev_candidate = dev;
+// helper: proof url
+const devProof = proofSig
+  ? [`https://solscan.io/tx/${proofSig}`]
+  : [explorerToken("sol", mint)];
+
+if (dev) {
+  meta.dev_candidate = dev;
+
+  // веса: чем слабее источник — тем ниже вес
+  const w =
+    reason === "earliestSigner" ? 12 :
+    reason === "mintAuthority" ? 8 :
+    reason === "freezeAuthority" ? 6 :
+    4; // fallback
+
+  // IMPORTANT: id должен начинаться с DEV_CANDIDATE чтобы попасть в CONTEXT в твоём categorizeSignalId
+  signals.push({
+    id: "DEV_CANDIDATE",
+    label: `Dev wallet candidate (${reason})`,
+    value: dev,
+    weight: w,
+    proof: devProof,
+  });
+
+  // Доп. сигнал (dev behavior), если нашли earliest signer
+  if (reason === "earliestSigner" && signerDev) {
     signals.push({
-      id: "DEV_CANDIDATE_V04",
-      label: `Dev wallet candidate (${reason})`,
-      value: dev,
-      weight: 0,
-      proof: proofSig
-        ? [`https://solscan.io/tx/${proofSig}`]
-        : [explorerToken("sol", mint)]
+      id: "DEV_EARLY_SIGNER",
+      label: "Dev was earliest signer (possible deployer/initiator)",
+      value: signerDev,
+      weight: 6,
+      proof: devProof,
     });
   }
+} else {
+  // Чтобы UI/логика не были “пустыми”, если дев не найден
+  meta.dev_candidate = undefined;
+  signals.push({
+    id: "DEV_UNKNOWN",
+    label: "Dev wallet candidate not found",
+    value: "",
+    weight: 2,
+    proof: [explorerToken("sol", mint)],
+  });
+}
 
-  return { signals, meta, launchTs };
+return { signals, meta, launchTs };
 }
 
 /* =========================================================
