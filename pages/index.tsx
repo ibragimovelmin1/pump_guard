@@ -40,8 +40,8 @@ function categorizeSignalId(id: string): SignalCategory {
   return "OTHER";
 }
 
-function sumByCategory(signals: { id: string; weight: number }[]) {
-  const buckets: Record<SignalCategory, number> = {
+function sumByCategory(signals: { id: string; weight: any }[]) {
+  const buckets = {
     PERMISSIONS: 0,
     DISTRIBUTION: 0,
     DEV_BEHAVIOR: 0,
@@ -49,11 +49,10 @@ function sumByCategory(signals: { id: string; weight: number }[]) {
     OTHER: 0,
   };
 
-  for (const s of signals) {
-    const key = categorizeSignalId(s.id);
-    buckets[key] += s.weight || 0;
+  for (const s of signals || []) {
+    const w = Number(s?.weight ?? 0) || 0;
+    buckets[categorizeSignalId(String(s?.id ?? ""))] += w;
   }
-
   return buckets;
 }
 
