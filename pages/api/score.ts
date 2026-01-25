@@ -221,21 +221,29 @@ meta.holders = largest.value.length;
 
 if (typeof top10Percent === "number") {
   if (top10Percent > 80) {
-    addSignal({
+    signals.push({
       id: "TOP10_GT_80",
       label: "Top holders concentration is extreme",
       value: `top10=${top10Percent.toFixed(1)}%`,
       weight: 18,
       proof: [explorerToken("sol", mint)],
-    } as any);
+    });
   } else if (top10Percent > 60) {
-    addSignal({
+    signals.push({
       id: "TOP10_GT_60",
       label: "Top holders concentration is high",
       value: `top10=${top10Percent.toFixed(1)}%`,
       weight: 10,
       proof: [explorerToken("sol", mint)],
-    } as any);
+    });
+  } else if (top10Percent > 40) {
+    signals.push({
+      id: "TOP10_GT_40",
+      label: "Top holders concentration is elevated",
+      value: `top10=${top10Percent.toFixed(1)}%`,
+      weight: 6,
+      proof: [explorerToken("sol", mint)],
+    });
   }
 }
 
