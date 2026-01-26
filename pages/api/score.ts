@@ -50,6 +50,36 @@ function levelFromScore(score: number): RiskLevel {
 }
 
 /**
+ * FIX: get real-ish token age by paging signatures.
+ * Previous approach (limit 200) underestimates age for active tokens.
+ */
+async function getTokenAgeSeconds(conn: Connection, mintPk: PublicKey) {
+  const now = Math.floor(Date.now() / 1000);
+
+  let before: string | undefined = undefined;
+  let oldestBt: number | null = null;
+
+  // safety: max 8 pages * 1000 signatures
+  for (let page = 0; page < 8; page++) {
+    const sigs = await conn.getSignaturesForAddress(mintPk, { limit: 1000, before });
+    if (sigs.length === 0) break;
+
+    const last = sigs[sigs.length - 1];
+    before = last.signature;
+
+    let bt = last.blockTime ?? null;
+    if (!bt && last.slot) bt = await conn.getBlockTime(last.slot);
+    if (bt) oldestBt = bt;
+
+    // if we reached the end (less than full page), stop
+    if (sigs.length < 1000) break;
+  }
+
+  if (!oldestBt) return undefined;
+  return Math.max(0, now - oldestBt);
+}
+
+/**
  * Risk model (caps):
  * PERMISSIONS        max 10
  * DISTRIBUTION       max 30
@@ -93,7 +123,10 @@ function categorizeSignalId(id: string): RiskCategory {
     id.startsWith("TAX_") ||
     id.startsWith("TRANSFER_") ||
     id.startsWith("HOOKS_") ||
-    id.startsWith("NONSTANDARD_")
+    id.startsWith("NONSTANDARD_") ||
+    id === "HIGH_TAX" ||
+    id === "BLACKLIST_OR_TRANSFER_BLOCK" ||
+    id === "NONSTANDARD_TRANSFER"
   )
     return "DEV_CONTRACT";
 
@@ -102,23 +135,20 @@ function categorizeSignalId(id: string): RiskCategory {
     id.startsWith("DEV_DUMP_") ||
     id.startsWith("BUNDLED_") ||
     id.startsWith("MEV_") ||
-    id.startsWith("CLUSTER_")
+    id.startsWith("CLUSTER_") ||
+    id === "DEV_DUMP_EARLY" ||
+    id === "BUNDLED_LAUNCH_OR_MEV" ||
+    id === "CLUSTER_FUNDING"
   )
     return "TX_PATTERNS";
 
   // CONTEXT (info only)
-  if (
-    id.startsWith("TOKEN_AGE_") ||
-    id.startsWith("DEV_") || // DEV_CANDIDATE / DEV_UNKNOWN / DEV_EARLY_SIGNER etc
-    id.startsWith("CONTEXT_")
-  )
-    return "CONTEXT";
+  if (id.startsWith("DEV_") || id.startsWith("CONTEXT_")) return "CONTEXT";
 
-  // fallback: treat unknown as CONTEXT (won't affect score)
   return "CONTEXT";
 }
 
-/** Apply category caps to signal weights (keeps your UI "signals" list intact) */
+/** Apply category caps to signal weights */
 function computeScoreWithCaps(signals: Signal[]) {
   const totals: Record<RiskCategory, number> = {
     PERMISSIONS: 0,
@@ -135,11 +165,9 @@ function computeScoreWithCaps(signals: Signal[]) {
     totals[cat] += w;
   }
 
-  // cap each category
   let score = 0;
   (Object.keys(totals) as RiskCategory[]).forEach(cat => {
-    const capped = clamp(totals[cat], 0, CATEGORY_MAX[cat]);
-    score += capped;
+    score += clamp(totals[cat], 0, CATEGORY_MAX[cat]);
   });
 
   return clamp(score, 0, 100);
@@ -158,41 +186,6 @@ type SolTokenMeta = {
   mint_authority_present?: boolean;
   freeze_authority_present?: boolean;
 };
-
-type HeliusTx = {
-  signature?: string;
-  timestamp?: number;
-  tokenTransfers?: Array<{
-    mint: string;
-    fromUserAccount?: string | null;
-    toUserAccount?: string | null;
-    tokenAmount?: number | null;
-  }>;
-};
-
-/* =========================================================
-   Helius helpers
-   ========================================================= */
-
-async function heliusFetch<T>(path: string): Promise<T> {
-  const apiKey = process.env.HELIUS_API_KEY;
-  if (!apiKey) throw new Error("Missing HELIUS_API_KEY");
-
-  const url = `https://api.helius.xyz${path}${
-    path.includes("?") ? "&" : "?"
-  }api-key=${apiKey}`;
-
-  const resp = await fetch(url, {
-    headers: { accept: "application/json" }
-  });
-
-  if (!resp.ok) {
-    const txt = await resp.text();
-    throw new Error(`Helius error ${resp.status}: ${txt.slice(0, 200)}`);
-  }
-
-  return resp.json() as Promise<T>;
-}
 
 /* =========================================================
    Dev detection
@@ -248,7 +241,6 @@ async function solTokenSignals(
 ): Promise<{ signals: Signal[]; meta: SolTokenMeta; launchTs?: number }> {
   const signals: Signal[] = [];
 
-  // helper: normalize proof
   const addSignal = (s: Signal) => {
     signals.push({
       ...s,
@@ -272,7 +264,6 @@ async function solTokenSignals(
   meta.mint_authority_present = Boolean(mintAuth);
   meta.freeze_authority_present = Boolean(freezeAuth);
 
-  // NEW MODEL: mint +5, freeze +5
   if (mintAuth) {
     addSignal({
       id: "MINT_AUTHORITY_PRESENT",
@@ -311,7 +302,6 @@ async function solTokenSignals(
   meta.top10_percent = top10Percent;
   meta.holders = largest.value.length;
 
-  // NEW MODEL: 80% -> +15, 60% -> +10, 40% -> +5 (mutually exclusive)
   if (typeof top10Percent === "number") {
     if (top10Percent > 80) {
       addSignal({
@@ -341,10 +331,7 @@ async function solTokenSignals(
   }
 
   /* ---------- LP (LIQUIDITY max 10) ---------- */
-  // Variant A: unknown -> 0 points, but show info in WHY
-  // Real LP detection (Raydium/Orca/Meteora) will later add:
-  // - LP_NOT_BURNED -> +10
-  // - LP_BURNED_LOCKED_100 -> +0 (optional info)
+  // Variant A: unknown -> 0 points, but show info in UI
   addSignal({
     id: "LP_STATUS_UNKNOWN",
     label: "LP status unknown (not detected yet)",
@@ -353,53 +340,14 @@ async function solTokenSignals(
     proof: [explorerToken("sol", mint)]
   } as any);
 
-  /* ---------- Age (CONTEXT only, weight 0) ---------- */
-
+  /* ---------- Age (META ONLY, no TOKEN_AGE signals) ---------- */
   try {
-    const sigs = await conn.getSignaturesForAddress(mintPk, { limit: 200 });
-    if (sigs.length > 0) {
-      const oldest = sigs[sigs.length - 1];
-      let bt = oldest.blockTime ?? null;
-      if (!bt && oldest.slot) bt = await conn.getBlockTime(oldest.slot);
-
-      if (bt) {
-        const now = Math.floor(Date.now() / 1000);
-        const ageSeconds = Math.max(0, now - bt);
-        meta.age_seconds = ageSeconds;
-
-        if (ageSeconds < 3600) {
-          addSignal({
-            id: "TOKEN_AGE_LT_1H",
-            label: "Token is very new (<1h)",
-            value: `${Math.max(1, Math.floor(ageSeconds / 60))}m`,
-            weight: 0,
-            proof: [explorerToken("sol", mint)]
-          } as any);
-        } else if (ageSeconds < 21600) {
-          addSignal({
-            id: "TOKEN_AGE_LT_6H",
-            label: "Token is new (1–6h)",
-            value: `${Math.floor(ageSeconds / 3600)}h`,
-            weight: 0,
-            proof: [explorerToken("sol", mint)]
-          } as any);
-        } else if (ageSeconds < 86400) {
-          addSignal({
-            id: "TOKEN_AGE_LT_24H",
-            label: "Token is fresh (6–24h)",
-            value: `${Math.floor(ageSeconds / 3600)}h`,
-            weight: 0,
-            proof: [explorerToken("sol", mint)]
-          } as any);
-        }
-      }
-    }
+    meta.age_seconds = await getTokenAgeSeconds(conn, mintPk);
   } catch {
-    // age is context only; ignore RPC errors
+    // ignore
   }
 
   /* ---------- Dev candidate (CONTEXT only, weight 0) ---------- */
-
   let signerDev: string | null = null;
   let proofSig: string | undefined;
   let launchTs: number | undefined;
@@ -424,7 +372,7 @@ async function solTokenSignals(
       id: "DEV_CANDIDATE",
       label: `Dev wallet candidate (${reason})`,
       value: dev,
-      weight: 0, // CONTEXT ONLY
+      weight: 0,
       proof: devProof
     } as any);
 
@@ -433,7 +381,7 @@ async function solTokenSignals(
         id: "DEV_EARLY_SIGNER",
         label: "Dev was earliest signer (possible deployer/initiator)",
         value: signerDev,
-        weight: 0, // CONTEXT ONLY
+        weight: 0,
         proof: devProof
       } as any);
     }
@@ -443,7 +391,7 @@ async function solTokenSignals(
       id: "DEV_UNKNOWN",
       label: "Dev wallet candidate not found",
       value: "",
-      weight: 0, // CONTEXT ONLY
+      weight: 0,
       proof: [explorerToken("sol", mint)]
     } as any);
   }
@@ -477,7 +425,7 @@ export default async function handler(
   const chain = normalizeChain((req.query.chain as ChainAuto) || "auto", input);
 
   let signals: Signal[] = [];
-  let score = 0; // NEW: no base points
+  let score = 0;
   let confidence: Confidence = "LOW";
   let mode: "LIVE" | "DEMO" = "DEMO";
 
@@ -493,7 +441,6 @@ export default async function handler(
       const r = await solTokenSignals(conn, input);
       signals.push(...r.signals);
 
-      // NEW: compute using category caps (CONTEXT=0)
       score = computeScoreWithCaps(signals);
 
       if (
@@ -542,8 +489,6 @@ export default async function handler(
       weight: 0
     } as any);
   }
-
-  /* ---------- DEMO fallback ---------- */
 
   signals.push({
     id: "DEMO_MODE",
