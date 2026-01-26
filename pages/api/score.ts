@@ -534,8 +534,8 @@ export default async function handler(
         input_type: "token",
         token: {
           address: input,
-         name: tmeta?.name ?? undefined,
-         symbol: tmeta?.symbol ?? undefined,  
+         name: tmeta?.name,
+         symbol: tmeta?.symbol, 
           age_seconds: r.meta.age_seconds,
           holders: r.meta.holders,
           top10_percent: r.meta.top10_percent,
