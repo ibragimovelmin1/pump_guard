@@ -12,7 +12,7 @@ import { explorerAddress, explorerToken } from "../../lib/explorer";
 import { Connection, PublicKey } from "@solana/web3.js";
 
 /* =========================================================
-   In-memory cache (serverless-safe, best effort)
+   In-memory cache
    ========================================================= */
 
 type CacheEntry = { ts: number; value: any };
@@ -30,7 +30,6 @@ function cacheGet(key: string, ttlMs: number) {
   }
   return e.value;
 }
-
 function cacheSet(key: string, value: any) {
   __PG_CACHE.set(key, { ts: Date.now(), value });
 }
@@ -47,38 +46,6 @@ function levelFromScore(score: number): RiskLevel {
   if (score >= 70) return "HIGH";
   if (score >= 35) return "MEDIUM";
   return "LOW";
-}
-
-/**
- * FIX: get real-ish token age by paging signatures.
- * Previous approach (limit 200) underestimates age for active tokens.
- */
-async function getTokenAgeSeconds(conn: Connection, mintPk: PublicKey) {
-  const now = Math.floor(Date.now() / 1000);
-
-  let before: string | undefined = undefined;
-  let oldestBt: number | null = null;
-
-  const MAX_PAGES = 10;                 // было 8
-  const STOP_DAYS = 200;                // early stop
-
-  for (let page = 0; page < MAX_PAGES; page++) {
-    const sigs = await conn.getSignaturesForAddress(mintPk, { limit: 1000, before });
-    if (sigs.length === 0) break;
-
-    const last = sigs[sigs.length - 1];
-    before = last.signature;
-
-    let bt = last.blockTime ?? null;
-    if (!bt && last.slot) bt = await conn.getBlockTime(last.slot);
-    if (bt) oldestBt = bt;
-
-    if (oldestBt && (now - oldestBt) > STOP_DAYS * 24 * 3600) break;
-    if (sigs.length < 1000) break;
-  }
-
-  if (!oldestBt) return undefined;
-  return Math.max(0, now - oldestBt);
 }
 
 /**
@@ -144,13 +111,12 @@ function categorizeSignalId(id: string): RiskCategory {
   )
     return "TX_PATTERNS";
 
-  // CONTEXT (info only)
+  // CONTEXT
   if (id.startsWith("DEV_") || id.startsWith("CONTEXT_")) return "CONTEXT";
 
   return "CONTEXT";
 }
 
-/** Apply category caps to signal weights */
 function computeScoreWithCaps(signals: Signal[]) {
   const totals: Record<RiskCategory, number> = {
     PERMISSIONS: 0,
@@ -188,6 +154,51 @@ type SolTokenMeta = {
   mint_authority_present?: boolean;
   freeze_authority_present?: boolean;
 };
+
+/* =========================================================
+   Age: Helius (fast + deeper history) with fallback
+   ========================================================= */
+
+async function getLaunchTsHelius(address: string): Promise<number | undefined> {
+  const apiKey = process.env.HELIUS_API_KEY;
+  if (!apiKey) return undefined;
+
+  // Enhanced Transactions by Address (asc = oldest first)
+  const url =
+    `https://api-mainnet.helius-rpc.com/v0/addresses/${address}/transactions` +
+    `?api-key=${apiKey}&limit=1&sort-order=asc`;
+
+  const resp = await fetch(url, { headers: { accept: "application/json" } });
+  if (!resp.ok) return undefined;
+
+  const txs = (await resp.json()) as Array<{ timestamp?: number }>;
+  const ts = txs?.[0]?.timestamp;
+  return typeof ts === "number" ? ts : undefined;
+}
+
+async function getTokenAgeSecondsFallback(conn: Connection, mintPk: PublicKey) {
+  const now = Math.floor(Date.now() / 1000);
+  let before: string | undefined = undefined;
+  let oldestBt: number | null = null;
+
+  const MAX_PAGES = 8; // keep it fast
+  for (let page = 0; page < MAX_PAGES; page++) {
+    const sigs = await conn.getSignaturesForAddress(mintPk, { limit: 1000, before });
+    if (sigs.length === 0) break;
+
+    const last = sigs[sigs.length - 1];
+    before = last.signature;
+
+    let bt = last.blockTime ?? null;
+    if (!bt && last.slot) bt = await conn.getBlockTime(last.slot);
+    if (bt) oldestBt = bt;
+
+    if (sigs.length < 1000) break;
+  }
+
+  if (!oldestBt) return undefined;
+  return Math.max(0, now - oldestBt);
+}
 
 /* =========================================================
    Dev detection
@@ -240,9 +251,8 @@ async function detectEarliestSigner(
 async function solTokenSignals(
   conn: Connection,
   mint: string
-): Promise<{ signals: Signal[]; meta: SolTokenMeta; launchTs?: number }> {
+): Promise<{ signals: Signal[]; meta: SolTokenMeta }> {
   const signals: Signal[] = [];
-
   const addSignal = (s: Signal) => {
     signals.push({
       ...s,
@@ -332,8 +342,7 @@ async function solTokenSignals(
     }
   }
 
-  /* ---------- LP (LIQUIDITY max 10) ---------- */
-  // Variant A: unknown -> 0 points, but show info in UI
+  /* ---------- LP (info only) ---------- */
   addSignal({
     id: "LP_STATUS_UNKNOWN",
     label: "LP status unknown (not detected yet)",
@@ -342,23 +351,28 @@ async function solTokenSignals(
     proof: [explorerToken("sol", mint)]
   } as any);
 
-  /* ---------- Age (META ONLY, no TOKEN_AGE signals) ---------- */
+  /* ---------- Age (META only) ---------- */
   try {
-    meta.age_seconds = await getTokenAgeSeconds(conn, mintPk);
+    const ts = await getLaunchTsHelius(mint);
+    if (ts) {
+      const now = Math.floor(Date.now() / 1000);
+      meta.age_seconds = Math.max(0, now - ts);
+    } else {
+      meta.age_seconds = await getTokenAgeSecondsFallback(conn, mintPk);
+    }
   } catch {
     // ignore
   }
 
   /* ---------- Dev candidate (CONTEXT only, weight 0) ---------- */
+
   let signerDev: string | null = null;
   let proofSig: string | undefined;
-  let launchTs: number | undefined;
 
   try {
     const r = await detectEarliestSigner(conn, mintPk);
     signerDev = r.signer ?? null;
     proofSig = r.proofSig;
-    launchTs = r.launchTs;
   } catch {}
 
   const { dev, reason } = await bestDevCandidate(mintAuth, freezeAuth, signerDev);
@@ -398,7 +412,7 @@ async function solTokenSignals(
     } as any);
   }
 
-  return { signals, meta, launchTs };
+  return { signals, meta };
 }
 
 /* =========================================================
@@ -441,16 +455,11 @@ export default async function handler(
       confidence = "MED";
 
       const r = await solTokenSignals(conn, input);
-      signals.push(...r.signals);
+      signals = r.signals;
 
       score = computeScoreWithCaps(signals);
 
-      if (
-        r.meta.age_seconds &&
-        r.meta.top10_percent &&
-        r.meta.dev_candidate &&
-        process.env.HELIUS_API_KEY
-      ) {
+      if (r.meta.age_seconds && r.meta.top10_percent && r.meta.dev_candidate && process.env.HELIUS_API_KEY) {
         confidence = "HIGH";
       }
 
