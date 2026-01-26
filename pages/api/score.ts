@@ -59,8 +59,10 @@ async function getTokenAgeSeconds(conn: Connection, mintPk: PublicKey) {
   let before: string | undefined = undefined;
   let oldestBt: number | null = null;
 
-  // safety: max 8 pages * 1000 signatures
-  for (let page = 0; page < 8; page++) {
+  const MAX_PAGES = 60;                 // было 8
+  const STOP_DAYS = 200;                // early stop
+
+  for (let page = 0; page < MAX_PAGES; page++) {
     const sigs = await conn.getSignaturesForAddress(mintPk, { limit: 1000, before });
     if (sigs.length === 0) break;
 
@@ -71,7 +73,7 @@ async function getTokenAgeSeconds(conn: Connection, mintPk: PublicKey) {
     if (!bt && last.slot) bt = await conn.getBlockTime(last.slot);
     if (bt) oldestBt = bt;
 
-    // if we reached the end (less than full page), stop
+    if (oldestBt && (now - oldestBt) > STOP_DAYS * 24 * 3600) break;
     if (sigs.length < 1000) break;
   }
 
