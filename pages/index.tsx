@@ -1,151 +1,56 @@
-import { useMemo, useState, useEffect } from "react";
+import { useMemo, useState } from "react";
 import type { ChainAuto, ScoreResponse } from "../lib/types";
 import { detectChain } from "../lib/detect";
 
 /* =========================
-   UI helpers
+   Helpers
    ========================= */
 
 type RiskLevel = "LOW" | "MEDIUM" | "HIGH";
 
 function RiskBadge({ level }: { level: RiskLevel | string }) {
   const emoji = level === "HIGH" ? "🔴" : level === "MEDIUM" ? "🟡" : "🟢";
-  return (
-    <span className="badge">
-      {emoji} {String(level)}
-    </span>
-  );
+  return <span className="badge">{emoji} {String(level)}</span>;
 }
 
-type FlagsResp = {
-  rugged: number;
-  sus: number;
-  trusted: number;
-  recent: { type: "RUGGED" | "SUS" | "TRUSTED"; reason?: string; ts: string }[];
-  note?: string;
-  error?: string;
-};
+function formatAge(sec?: number) {
+  if (!sec && sec !== 0) return "—";
+  if (sec < 60) return "<1m";
+  const m = Math.floor(sec / 60);
+  if (m < 60) return `${m}m`;
+  const h = Math.floor(m / 60);
+  if (h < 48) return `${h}h`;
+  const d = Math.floor(h / 24);
+  return `${d}d`;
+}
 
 /* =========================
-   Signal categorization
+   WHY criteria (fixed model)
    ========================= */
 
-type SignalCategory = "PERMISSIONS" | "DISTRIBUTION" | "DEV_BEHAVIOR" | "CONTEXT" | "OTHER";
-
-function categorizeSignalId(id: string): SignalCategory {
-  const x = String(id || "").toUpperCase();
-
+const WHY_CRITERIA = [
   // PERMISSIONS
-  if (x.includes("MINT_AUTHORITY") || x.includes("FREEZE_AUTHORITY")) return "PERMISSIONS";
+  { id: "MINT_AUTHORITY_PRESENT", label: "Mint authority present", points: 5 },
+  { id: "FREEZE_AUTHORITY_PRESENT", label: "Freeze authority present", points: 5 },
 
-  // DISTRIBUTION
-  // покрывает: TOP10_GT_60, TOP10_GT_80, TOP10_*, DEV_TOP_HOLDER, *TOP_HOLDER*
-  if (x.startsWith("TOP10_") || x.startsWith("DEV_TOP_HOLDER") || x.includes("TOP_HOLDER"))
-    return "DISTRIBUTION";
+  // DISTRIBUTION (mutually exclusive)
+  { id: "TOP10_GT_80", label: "Top-10 holders > 80%", points: 15 },
+  { id: "TOP10_GT_60", label: "Top-10 holders > 60%", points: 10 },
+  { id: "TOP10_GT_40", label: "Top-10 holders > 40%", points: 5 },
 
-  // DEV_BEHAVIOR
-  // покрывает: DEV_EARLY_SIGNER, DEV_EARLY_*, HELIUS_*
-  if (x.startsWith("DEV_EARLY") || x.startsWith("HELIUS_")) return "DEV_BEHAVIOR";
+  // LIQUIDITY
+  { id: "LP_NOT_BURNED", label: "LP not burned / unlocked", points: 10 },
 
-  // CONTEXT
-  // покрывает: TOKEN_AGE_*, DEV_CANDIDATE, DEV_CANDIDATE_*, DEV_UNKNOWN, HOLDERS_*
-  if (
-    x.startsWith("TOKEN_AGE") ||
-    x.startsWith("DEV_CANDIDATE") ||
-    x === "DEV_UNKNOWN" ||
-    x.startsWith("HOLDERS_")
-  ) {
-    return "CONTEXT";
-  }
+  // DEV / CONTRACT
+  { id: "BLACKLIST_OR_TRANSFER_BLOCK", label: "Blacklist / transfer blocking", points: 15 },
+  { id: "HIGH_TAX", label: "High buy/sell tax", points: 10 },
+  { id: "NONSTANDARD_TRANSFER", label: "Non-standard transfer logic / hooks", points: 5 },
 
-  return "OTHER";
-}
-
-function sumByCategory(signals: { id: string; weight: any }[]) {
-  const buckets = {
-    PERMISSIONS: 0,
-    DISTRIBUTION: 0,
-    DEV_BEHAVIOR: 0,
-    CONTEXT: 0,
-    OTHER: 0,
-  };
-
-  for (const s of signals || []) {
-    const w = Number(s?.weight ?? 0) || 0;
-    buckets[categorizeSignalId(String(s?.id ?? ""))] += w;
-  }
-  return buckets;
-}
-
-/* =========================
-   Verdict + Share helpers
-   ========================= */
-
-type VerdictLevel = "LOW" | "MEDIUM" | "HIGH";
-
-function verdictFromScore(score: number): VerdictLevel {
-  if (score >= 67) return "HIGH";
-  if (score >= 34) return "MEDIUM";
-  return "LOW";
-}
-
-const VERDICT_COPY: Record<VerdictLevel, { headline: string; bullets: string[]; action: string }> = {
-  LOW: {
-    headline: "Low risk signals detected",
-    bullets: [
-      "No critical red flags detected in current on-chain signals.",
-      "Token is very new — volatility is likely high.",
-      "Always manage position size and exit plan.",
-    ],
-    action: "Suitable for quick pre-entry checks. Still not risk-free.",
-  },
-  MEDIUM: {
-    headline: "Moderate risk signals detected",
-    bullets: [
-      "Some on-chain risk signals are present.",
-      "Potential concerns require manual review.",
-      "Higher uncertainty compared to low-risk setups.",
-    ],
-    action: "Consider smaller size and faster invalidation.",
-  },
-  HIGH: {
-    headline: "High risk signals detected",
-    bullets: [
-      "Multiple red flags detected in on-chain behavior.",
-      "High probability of unfavorable outcomes.",
-      "Historical patterns resemble common rug scenarios.",
-    ],
-    action: "Avoid or treat as extremely high risk.",
-  },
-};
-
-function toTweetText(args: {
-  chain: string;
-  score: number;
-  level: VerdictLevel;
-  confidence?: string;
-  mode?: string;
-  topSignals: string[];
-  url: string;
-}) {
-  const emoji = args.level === "HIGH" ? "🔴" : args.level === "MEDIUM" ? "🟡" : "🟢";
-  const signalsLine = args.topSignals.length > 0 ? `\nSignals: ${args.topSignals.join(" • ")}` : "";
-
-  return (
-    `Checked with PUMP.GUARD\n\n` +
-    `${emoji} Risk score: ${args.score} / 100 (${args.level})\n` +
-    `Chain: ${args.chain.toUpperCase()}\n` +
-    (args.confidence ? `Confidence: ${args.confidence}\n` : "") +
-    (args.mode ? `Mode: ${args.mode}\n` : "") +
-    `${signalsLine}\n\n` +
-    `Not financial advice. Just signals.\n` +
-    `${args.url}`
-  );
-}
-
-function makeXIntentUrl(text: string) {
-  return `https://twitter.com/intent/tweet?text=${encodeURIComponent(text)}`;
-}
+  // TX PATTERNS
+  { id: "DEV_DUMP_EARLY", label: "Dev dumps shortly after launch", points: 10 },
+  { id: "BUNDLED_LAUNCH_OR_MEV", label: "Bundled launch / sniper / MEV", points: 5 },
+  { id: "CLUSTER_FUNDING", label: "Cluster funding", points: 5 },
+];
 
 /* =========================
    Page
@@ -153,7 +58,6 @@ function makeXIntentUrl(text: string) {
 
 export default function Home() {
   const [input, setInput] = useState("");
-  const [showWhy, setShowWhy] = useState(true);
   const [chain, setChain] = useState<ChainAuto>("auto");
   const [type, setType] = useState<"token" | "wallet">("token");
 
@@ -163,89 +67,10 @@ export default function Home() {
 
   const detected = useMemo(() => detectChain(input) ?? "—", [input]);
 
-  /* ---------- Community flags ---------- */
-
-  const [flags, setFlags] = useState<FlagsResp | null>(null);
-  const [flagReason, setFlagReason] = useState("");
-  const [flagLoading, setFlagLoading] = useState<"RUGGED" | "SUS" | "TRUSTED" | "">("");
-  const [flagErr, setFlagErr] = useState("");
-
-  // target зависит от результата скоринга (токен/дев)
-  const target = useMemo(() => {
-    if (!data) return null;
-
-    const target_type = data.input_type === "token" ? "token" : "dev";
-    const target_address = data.input_type === "token" ? data.token?.address : data.dev?.address;
-
-    if (!target_address) return null;
-    return { chain: data.chain, target_type, target_address };
-  }, [data]);
-
-  async function fetchFlags() {
-    if (!target) return;
-    setFlagErr("");
-
-    try {
-      const qs = new URLSearchParams({
-        chain: target.chain,
-        target_type: target.target_type,
-        target_address: target.target_address,
-      });
-
-      const res = await fetch(`/api/flags?${qs.toString()}`);
-      const j = await res.json();
-      if (!res.ok) throw new Error(j?.error || "Failed to load flags");
-      setFlags(j);
-    } catch (e: any) {
-      setFlags(null);
-      setFlagErr(e?.message || "Failed to load flags");
-    }
-  }
-
-  useEffect(() => {
-    if (target) fetchFlags();
-    else setFlags(null);
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [target?.chain, target?.target_type, target?.target_address]);
-
-  async function submitFlag(flag_type: "RUGGED" | "SUS" | "TRUSTED") {
-    if (!target) return;
-
-    setFlagLoading(flag_type);
-    setFlagErr("");
-
-    try {
-      const res = await fetch("/api/flag", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          chain: target.chain,
-          target_type: target.target_type,
-          target_address: target.target_address,
-          flag_type,
-          reason: flagReason,
-        }),
-      });
-
-      const j = await res.json();
-      if (!res.ok) throw new Error(j?.error || "Failed to submit flag");
-
-      setFlagReason("");
-      await fetchFlags();
-    } catch (e: any) {
-      setFlagErr(e?.message || "Failed to submit flag");
-    } finally {
-      setFlagLoading("");
-    }
-  }
-
-  /* ---------- Main request ---------- */
-
   async function run() {
     setLoading(true);
     setError("");
     setData(null);
-    setFlags(null);
 
     try {
       const qs = new URLSearchParams({ input, chain, type });
@@ -260,12 +85,9 @@ export default function Home() {
     }
   }
 
-  /* =========================
-     Render
-     ========================= */
-
   return (
     <>
+      {/* NAV */}
       <div className="nav">
         <div className="wrap nav-inner">
           <div className="brand">
@@ -276,334 +98,132 @@ export default function Home() {
       </div>
 
       <main className="wrap" style={{ padding: "22px 0 40px" }}>
-        {/* ---------- Input ---------- */}
-        <div className="card">
-          <h1 style={{ margin: "0 0 8px" }}>Check the risk before you buy</h1>
-          <div className="small">
-            Paste a token (SOL mint / 0x contract) or a dev wallet. Chain auto-detect is supported.
+
+        {/* TOP ROW */}
+        <div className="grid" style={{ gridTemplateColumns: "1fr 1fr", gap: 14 }}>
+
+          {/* LEFT — INPUT */}
+          <div className="card">
+            <h1 style={{ margin: "0 0 8px" }}>Check the risk before you buy</h1>
+            <div className="small">
+              Paste a token contract or dev wallet. Chain auto-detect supported.
+            </div>
+
+            <div style={{ height: 12 }} />
+
+            <input
+              className="input"
+              placeholder="Token address (SOL / 0x...) or wallet"
+              value={input}
+              onChange={(e) => setInput(e.target.value)}
+            />
+
+            <div style={{ height: 12 }} />
+
+            <div className="row">
+              <label className="small">Chain:</label>
+              <select className="input" value={chain} onChange={(e) => setChain(e.target.value as any)}>
+                <option value="auto">auto (detected: {detected})</option>
+                <option value="sol">sol</option>
+                <option value="eth">eth</option>
+                <option value="bnb">bnb</option>
+              </select>
+
+              <label className="small">Type:</label>
+              <select className="input" value={type} onChange={(e) => setType(e.target.value as any)}>
+                <option value="token">token</option>
+                <option value="wallet">wallet</option>
+              </select>
+
+              <button className="btn btn-primary" disabled={!input || loading} onClick={run}>
+                {loading ? "Checking..." : "Check risk"}
+              </button>
+            </div>
           </div>
 
-          <div style={{ height: 12 }} />
+          {/* RIGHT — RISK + CONTEXT */}
+          <div className="card">
+            <div className="small">Chain</div>
+            <div style={{ fontWeight: 900, fontSize: 18 }}>
+              {data ? data.chain.toUpperCase() : "—"}
+            </div>
 
-          <input
-            className="input"
-            placeholder="Token address (SOL mint / 0x...) or wallet"
-            value={input}
-            onChange={(e) => setInput(e.target.value)}
-          />
+            <hr />
 
-          <div style={{ height: 12 }} />
+            <div className="small">Risk score</div>
+            <div style={{ fontWeight: 900, fontSize: 28 }}>
+              {data ? `${data.risk.score} / 100` : "0 / 100"}
+            </div>
 
-          <div className="row">
-            <label className="small">Chain:</label>
-            <select className="input" value={chain} onChange={(e) => setChain(e.target.value as any)}>
-              <option value="auto">auto (detected: {detected})</option>
-              <option value="sol">sol</option>
-              <option value="eth">eth</option>
-              <option value="bnb">bnb</option>
-            </select>
+            <div style={{ marginTop: 6 }}>
+              <RiskBadge level={data?.risk.level ?? "LOW"} />
+            </div>
 
-            <label className="small">Type:</label>
-            <select className="input" value={type} onChange={(e) => setType(e.target.value as any)}>
-              <option value="token">token</option>
-              <option value="wallet">wallet</option>
-            </select>
+            <hr />
 
-            <button className="btn btn-primary" disabled={!input || loading} onClick={run}>
-              {loading ? "Checking..." : "Check risk"}
-            </button>
+            <div className="small">Dev wallet</div>
+            <div style={{ wordBreak: "break-all" }}>
+              {data?.dev?.address ?? "—"}
+            </div>
+
+            <div style={{ height: 8 }} />
+
+            <div className="small">Token age</div>
+            <div>{formatAge(data?.token?.age_seconds)}</div>
+
+            <div className="small" style={{ opacity: 0.6, marginTop: 8 }}>
+              Info only — does not affect score
+            </div>
           </div>
         </div>
 
-        {/* ---------- Error ---------- */}
+        {/* ERROR */}
         {error && (
-          <div className="card" style={{ marginTop: 14 }}>
-            <b>Error:</b> {error}
-          </div>
+          <>
+            <div style={{ height: 14 }} />
+            <div className="card"><b>Error:</b> {error}</div>
+          </>
         )}
 
-        {/* ---------- Result ---------- */}
+        {/* WHY — FULL WIDTH */}
         {data && (
           <>
             <div style={{ height: 14 }} />
-
-            {/* 2 cards grid: Summary + WHY */}
-            <div className="grid">
-              {/* Summary card */}
-              <div className="card">
-                <div className="row" style={{ justifyContent: "space-between" }}>
-                  <div>
-                    <div className="small">Chain</div>
-                    <div style={{ fontWeight: 900, fontSize: 18 }}>{data.chain.toUpperCase()}</div>
-                  </div>
-                  <RiskBadge level={(data.risk.level as any) ?? "LOW"} />
-                </div>
-
-                <hr />
-
-                <div className="row" style={{ justifyContent: "space-between" }}>
-                  <div>
-                    <div className="small">Risk score</div>
-                    <div style={{ fontWeight: 900, fontSize: 28 }}>{data.risk.score} / 100</div>
-                  </div>
-
-                  <div>
-                    <div className="small">Confidence</div>
-                    <div style={{ fontWeight: 900 }}>{data.risk.confidence}</div>
-                    <div className="small">Mode: {data.risk.mode}</div>
-                  </div>
-                </div>
-              </div>
-
-              {/* WHY card */}
-              <div className="card">
-  <div style={{ fontWeight: 900 }}>WHY (signals)</div>
-  <hr />
-
-  {(data.signals?.length ?? 0) === 0 ? (
-    <div className="small" style={{ opacity: 0.7 }}>
-      No significant on-chain signals detected
-    </div>
-  ) : (
-    <div style={{ display: "grid", gap: 10 }}>
-      {data.signals.map((s) => (
-        <div key={s.id} className="card" style={{ padding: 12 }}>
-          <div style={{ fontWeight: 800 }}>{s.label}</div>
-
-          <div className="small">
-            Weight: <b>{s.weight}</b>
-            {s.value ? ` • ${s.value}` : ""}
-          </div>
-
-          {Array.isArray(s.proof) && s.proof.length > 0 && (
-            <div className="small">
-              <a href={s.proof[0]} target="_blank" rel="noreferrer">
-                            Proof link
-                          </a>
-                        </div>
-                      )}
-                    </div>
-                  ))}
-                </div>
-              )}</div>
-            </div>
-
-            {/* VERDICT card (separate, to avoid layout breaks) */}
-            <div style={{ height: 14 }} />
             <div className="card">
-              {(() => {
-                const vLevel = verdictFromScore(data.risk.score);
-                const v = VERDICT_COPY[vLevel];
-
-                const topSignals = [...(data.signals ?? [])]
-                  .sort((a, b) => (b.weight || 0) - (a.weight || 0))
-                  .slice(0, 2)
-                  .map((s) => s.label);
-
-                const url =
-                  typeof window !== "undefined" ? window.location.href : "https://pump-guard-azure.vercel.app/";
-
-                const tweet = toTweetText({
-                  chain: data.chain,
-                  score: data.risk.score,
-                  level: vLevel,
-                  confidence: data.risk.confidence,
-                  mode: data.risk.mode,
-                  topSignals,
-                  url,
-                });
-
-                return (
-                  <>
-                    <div className="row" style={{ justifyContent: "space-between" }}>
-                      <div style={{ fontWeight: 900 }}>VERDICT</div>
-                      <RiskBadge level={vLevel} />
-                    </div>
-
-                    <div style={{ height: 8 }} />
-                    <div style={{ fontWeight: 800 }}>{v.headline}</div>
-
-                    <div style={{ height: 10 }} />
-                    <div className="small" style={{ display: "grid", gap: 4 }}>
-                      {v.bullets.map((t) => (
-                        <div key={t}>• {t}</div>
-                      ))}
-                    </div>
-
-                    <div style={{ height: 10 }} />
-                    <div className="small">
-                      <b>Suggested action:</b> {v.action}
-                    </div>
-
-                    <div style={{ height: 12 }} />
-                    <div className="row" style={{ gap: 10 }}>
-                      <a className="btn btn-primary" href={makeXIntentUrl(tweet)} target="_blank" rel="noreferrer">
-                        Share on X
-                      </a>
-                      <div className="small" style={{ opacity: 0.8 }}>
-                        You control what you share.
-                      </div>
-                    </div>
-                  </>
-                );
-              })()}
-            </div>
-
-            {/* Community flags card */}
-            <div style={{ height: 14 }} />
-            <div className="card">
-              <div className="row" style={{ justifyContent: "space-between" }}>
-                <div style={{ fontWeight: 900 }}>COMMUNITY FLAGS</div>
-                {target ? (
-                  <div className="small" style={{ opacity: 0.8 }}>
-                    Target: {target.target_type} • {target.chain.toUpperCase()}
-                  </div>
-                ) : (
-                  <div className="small" style={{ opacity: 0.8 }}>Target: —</div>
-                )}
-              </div>
-
+              <div style={{ fontWeight: 900 }}>WHY (signals)</div>
+              <div className="small">These checks may affect the score</div>
               <hr />
 
-              {flagErr && (
-                <div className="small" style={{ marginBottom: 10 }}>
-                  <b>Error:</b> {flagErr}
+              {/* LP unknown info (Variant A) */}
+              {data.signals?.some(s => s.id === "LP_STATUS_UNKNOWN") && (
+                <div className="card" style={{ padding: 12, marginBottom: 12 }}>
+                  <div style={{ fontWeight: 700 }}>LP status unknown</div>
+                  <div className="small">Info only — does not affect score</div>
                 </div>
               )}
 
-              <div className="row" style={{ gap: 14, flexWrap: "wrap" }}>
-                <div className="badge">🔴 RUGGED: <b>{flags?.rugged ?? 0}</b></div>
-                <div className="badge">🟡 SUS: <b>{flags?.sus ?? 0}</b></div>
-                <div className="badge">🟢 TRUSTED: <b>{flags?.trusted ?? 0}</b></div>
-              </div>
-
-              <div style={{ height: 12 }} />
-
-              <div className="small" style={{ marginBottom: 6 }}>
-                Optional reason (shown in recent activity):
-              </div>
-              <input
-                className="input"
-                placeholder="e.g. dev dumped supply, LP pulled, obvious bundling..."
-                value={flagReason}
-                onChange={(e) => setFlagReason(e.target.value)}
-              />
-
-              <div style={{ height: 10 }} />
-
-              <div className="row" style={{ gap: 10, flexWrap: "wrap" }}>
-                <button
-                  className="btn"
-                  disabled={!target || flagLoading !== ""}
-                  onClick={() => submitFlag("RUGGED")}
-                >
-                  {flagLoading === "RUGGED" ? "Voting..." : "Vote RUGGED"}
-                </button>
-                <button
-                  className="btn"
-                  disabled={!target || flagLoading !== ""}
-                  onClick={() => submitFlag("SUS")}
-                >
-                  {flagLoading === "SUS" ? "Voting..." : "Vote SUS"}
-                </button>
-                <button
-                  className="btn"
-                  disabled={!target || flagLoading !== ""}
-                  onClick={() => submitFlag("TRUSTED")}
-                >
-                  {flagLoading === "TRUSTED" ? "Voting..." : "Vote TRUSTED"}
-                </button>
-
-                <button className="btn" disabled={!target} onClick={fetchFlags}>
-                  Refresh
-                </button>
-              </div>
-
-              <div style={{ height: 14 }} />
-              <div style={{ fontWeight: 900, marginBottom: 6 }}>Recent activity</div>
-
-              <div style={{ display: "grid", gap: 8 }}>
-                {(flags?.recent ?? []).slice(0, 10).map((r, idx) => (
-                  <div key={`${r.ts}-${idx}`} className="card" style={{ padding: 12 }}>
-                    <div className="row" style={{ justifyContent: "space-between" }}>
-                      <div style={{ fontWeight: 800 }}>
-                        {r.type === "RUGGED" ? "🔴 RUGGED" : r.type === "SUS" ? "🟡 SUS" : "🟢 TRUSTED"}
+              <div className="grid" style={{ gridTemplateColumns: "1fr 1fr", gap: 12 }}>
+                {WHY_CRITERIA.map((c) => {
+                  const hit = data.signals?.find(s => s.id === c.id);
+                  return (
+                    <div key={c.id} className="row" style={{ justifyContent: "space-between" }}>
+                      <div>
+                        <div style={{ fontWeight: 700 }}>{c.label}</div>
+                        <div className="small" style={{ opacity: 0.7 }}>
+                          {hit ? "Triggered" : "Not triggered"}
+                        </div>
                       </div>
-                      <div className="small" style={{ opacity: 0.8 }}>
-                        {new Date(r.ts).toLocaleString()}
+                      <div style={{ fontWeight: 900 }}>
+                        {hit ? `+${c.points}` : "—"}
                       </div>
                     </div>
-                    {r.reason ? (
-                      <div className="small" style={{ marginTop: 6 }}>
-                        {r.reason}
-                      </div>
-                    ) : (
-                      <div className="small" style={{ marginTop: 6, opacity: 0.7 }}>
-                        (no reason)
-                      </div>
-                    )}
-                  </div>
-                ))}
-
-                {(flags?.recent ?? []).length === 0 && (
-                  <div className="small" style={{ opacity: 0.8 }}>
-                    No votes yet.
-                  </div>
-                )}
+                  );
+                })}
               </div>
-
-              {flags?.note && (
-                <>
-                  <div style={{ height: 10 }} />
-                  <div className="small" style={{ opacity: 0.8 }}>
-                    Note: {flags.note}
-                  </div>
-                </>
-              )}
             </div>
-
-            {/* Risk breakdown */}
-<div style={{ height: 14 }} />
-
-<div className="card">
-  <div
-    className="row"
-    style={{ justifyContent: "space-between", cursor: "pointer" }}
-    onClick={() => setShowWhy((v) => !v)}
-    title="Toggle WHY (signals)"
-  >
-    <b>Risk breakdown</b>
-    <span className="small" style={{ opacity: 0.8 }}>
-      {showWhy ? "Hide WHY" : "Show WHY"}
-    </span>
-  </div>
-
-  <hr />
-
-  {(() => {
-    const breakdown = sumByCategory(data.signals);
-    const entries = Object.entries(breakdown).filter(
-      ([_, v]) => Math.round(v) > 0
-    );
-
-    if (entries.length === 0) {
-      return (
-        <div className="small" style={{ opacity: 0.8 }}>
-          No significant risk factors detected
-        </div>
-      );
-    }
-
-    return entries.map(([k, v]) => (
-      <div key={k} className="row">
-        <span>{k}</span>
-        <b>{Math.round(v)}</b>
-      </div>
-    ));
-  })()}
-</div>
           </>
         )}
+
       </main>
     </>
   );
