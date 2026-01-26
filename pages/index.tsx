@@ -93,6 +93,77 @@ function makeHashtags(args: {
   // ограничим длину (чтобы не раздувать твит)
   return Array.from(tags).slice(0, 5).join(" ");
 }
+function signalEmoji(id: string, weight?: number) {
+  const x = String(id || "").toUpperCase();
+  const w = Number(weight ?? 0) || 0;
+
+  // TX patterns (обычно самые жесткие)
+  if (x.includes("DEV_DUMP") || x.includes("BUNDLED") || x.includes("MEV") || x.includes("CLUSTER"))
+    return w >= 10 ? "🔥" : "💣";
+
+  // DEV / CONTRACT
+  if (x.includes("BLACKLIST") || x.includes("TRANSFER_BLOCK"))
+    return "⛔";
+  if (x.includes("HIGH_TAX") || x.includes("TAX"))
+    return "⚖️";
+  if (x.includes("NONSTANDARD") || x.includes("HOOK"))
+    return "🧩";
+
+  // PERMISSIONS
+  if (x.includes("MINT_AUTHORITY"))
+    return "⚠️";
+  if (x.includes("FREEZE_AUTHORITY"))
+    return "🧊";
+
+  // DISTRIBUTION
+  if (x.startsWith("TOP10_"))
+    return w >= 10 ? "🐋" : "📊";
+  if (x.startsWith("DEV_HOLDS_"))
+    return "👤";
+
+  // LIQUIDITY
+  if (x.startsWith("LP_"))
+    return "💧";
+
+  return "⚠️";
+}
+function pickSmartSignals(args: {
+  signals: { id: string; label: string; weight?: number }[];
+  level: "LOW" | "MEDIUM" | "HIGH";
+  limit?: number;
+}) {
+  const limit = args.limit ?? 2;
+
+  const EXCLUDE = [
+    "LP_STATUS_UNKNOWN",
+    "DEMO_MODE",
+    "LIVE_ERROR",
+    "DEV_CANDIDATE",
+    "DEV_UNKNOWN",
+  ];
+
+  const filtered = (args.signals || []).filter(s => {
+    if (!s || !s.id) return false;
+    if (EXCLUDE.some(x => s.id.includes(x))) return false;
+    return (Number(s.weight ?? 0) || 0) > 0;
+  });
+
+  // сортировка по весу
+  filtered.sort((a, b) => (Number(b.weight ?? 0) || 0) - (Number(a.weight ?? 0) || 0));
+
+  if (args.level === "HIGH") {
+    // самые опасные
+    return filtered.slice(0, limit).map(s => `${signalEmoji(s.id, s.weight)} ${s.label}`);
+  }
+
+  if (args.level === "MEDIUM") {
+    // средние + высокие
+   return filtered.slice(0, limit).map(s => `${signalEmoji(s.id, s.weight)} ${s.label}`);
+  }
+
+  // LOW — берём самые “мягкие” из имеющихся
+  return filtered.slice(-limit).map(s => `${signalEmoji(s.id, s.weight)} ${s.label}`);
+}
 function toTweetText(args: {
   chain: string;
   score: number;
@@ -563,12 +634,11 @@ export default function Home() {
                   const vLevel = verdictFromScore(data.risk.score);
                   const v = VERDICT_COPY[vLevel];
 
-                  const topSignals = [...(data.signals ?? [])]
-                    .filter(s => (Number(s.weight ?? 0) || 0) > 0)
-                    .sort((a, b) => (Number(b.weight ?? 0) || 0) - (Number(a.weight ?? 0) || 0))
-                    .slice(0, 2)
-                    .map(s => s.label);
-
+                  const topSignals = pickSmartSignals({
+                  signals: data.signals ?? [],
+                  level: vLevel,
+                  limit: 2,
+                  });
                   const url = typeof window !== "undefined"
                     ? window.location.href
                     : "https://pump-guard-azure.vercel.app/";
