@@ -68,20 +68,37 @@ function toTweetText(args: {
   score: number;
   level: VerdictLevel;
   confidence?: string;
-  mode?: string;
   topSignals: string[];
   url: string;
+  tokenName?: string;
+  tokenSymbol?: string;
+  tokenAddress?: string;
 }) {
   const emoji = args.level === "HIGH" ? "🔴" : args.level === "MEDIUM" ? "🟡" : "🟢";
-  const signalsLine = args.topSignals.length > 0 ? `\nSignals: ${args.topSignals.join(" • ")}` : "";
+
+  const title =
+    args.tokenName
+      ? `${args.tokenName}${args.tokenSymbol ? ` (${args.tokenSymbol})` : ""}`
+      : args.tokenSymbol || "Token";
+
+  const shortAddr = args.tokenAddress
+    ? `${args.tokenAddress.slice(0, 4)}...${args.tokenAddress.slice(-4)}`
+    : "";
+
+  const signalsBlock =
+    args.topSignals.length > 0
+      ? `\nWHY:\n• ${args.topSignals.join("\n• ")}`
+      : "";
+
   return (
     `Checked with PUMP.GUARD\n\n` +
-    `${emoji} Risk score: ${args.score} / 100 (${args.level})\n` +
+    `${emoji} ${title}\n` +
+    `Risk: ${args.score} / 100 (${args.level})\n` +
     `Chain: ${args.chain.toUpperCase()}\n` +
     (args.confidence ? `Confidence: ${args.confidence}\n` : "") +
-    (args.mode ? `Mode: ${args.mode}\n` : "") +
-    `${signalsLine}\n\n` +
-    `Not financial advice. Just signals.\n` +
+    `${signalsBlock}\n\n` +
+    (shortAddr ? `Contract:\n${shortAddr}\n\n` : "") +
+    `Not financial advice.\n` +
     `${args.url}`
   );
 }
@@ -522,14 +539,16 @@ export default function Home() {
                     : "https://pump-guard-azure.vercel.app/";
 
                   const tweet = toTweetText({
-                    chain: data.chain,
-                    score: data.risk.score,
-                    level: vLevel,
-                    confidence: data.risk.confidence,
-                    mode: data.risk.mode,
-                    topSignals,
-                    url,
-                  });
+  chain: data.chain,
+  score: data.risk.score,
+  level: vLevel,
+  confidence: data.risk.confidence,
+  topSignals,
+  url,
+  tokenName: data.token?.name,
+  tokenSymbol: data.token?.symbol,
+  tokenAddress: data.token?.address,
+});
 
                   return (
                     <>
