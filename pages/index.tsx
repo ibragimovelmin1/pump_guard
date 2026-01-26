@@ -192,9 +192,13 @@ const WHY_GROUPS: { title: string; cap: number; rows: WhyRow[] }[] = [
     ],
   },
   {
-    title: "LIQUIDITY (LP)",
-    cap: 10,
-    rows: [{ id: "LP_NOT_BURNED", label: "LP not burned / unlocked", points: 10 }],
+    title: "TX PATTERNS",
+    cap: 20,
+    rows: [
+      { id: "DEV_DUMP_EARLY", label: "Dev dumps shortly after launch", points: 10 },
+      { id: "BUNDLED_LAUNCH_OR_MEV", label: "Bundled launch / sniper / MEV", points: 5 },
+      { id: "CLUSTER_FUNDING", label: "Cluster funding", points: 5 },
+    ],
   },
   {
     title: "DEV / CONTRACT",
@@ -205,15 +209,12 @@ const WHY_GROUPS: { title: string; cap: number; rows: WhyRow[] }[] = [
       { id: "NONSTANDARD_TRANSFER", label: "Non-standard transfer logic / hooks", points: 5 },
     ],
   },
-  {
-    title: "TX PATTERNS",
-    cap: 20,
-    rows: [
-      { id: "DEV_DUMP_EARLY", label: "Dev dumps shortly after launch", points: 10 },
-      { id: "BUNDLED_LAUNCH_OR_MEV", label: "Bundled launch / sniper / MEV", points: 5 },
-      { id: "CLUSTER_FUNDING", label: "Cluster funding", points: 5 },
-    ],
+   {
+    title: "LIQUIDITY (LP)",
+    cap: 10,
+    rows: [{ id: "LP_NOT_BURNED", label: "LP not burned / unlocked", points: 10 }],
   },
+  
 ];
 
 /* =========================
