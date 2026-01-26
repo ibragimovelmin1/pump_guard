@@ -127,6 +127,25 @@ function signalEmoji(id: string, weight?: number) {
 
   return "⚠️";
 }
+function shortSignalLabel(id: string, label: string) {
+  const x = id.toUpperCase();
+
+  if (x.includes("DEV_DUMP")) return "Dev early dump";
+  if (x.includes("BLACKLIST") || x.includes("TRANSFER_BLOCK")) return "Transfer blocked";
+  if (x.includes("BUNDLED")) return "Bundled launch";
+  if (x.includes("MEV")) return "MEV activity";
+
+  if (x.includes("MINT_AUTHORITY")) return "Mint authority active";
+  if (x.includes("FREEZE_AUTHORITY")) return "Freeze authority active";
+
+  if (x.startsWith("TOP10_")) return "Whale concentration";
+  if (x.startsWith("DEV_HOLDS_")) return "Dev holds supply";
+
+  if (x.startsWith("LP_")) return "LP risk";
+
+  // fallback — если не распознали
+  return label;
+}
 function pickSmartSignals(args: {
   signals: { id: string; label: string; weight?: number }[];
   level: "LOW" | "MEDIUM" | "HIGH";
@@ -153,16 +172,16 @@ function pickSmartSignals(args: {
 
   if (args.level === "HIGH") {
     // самые опасные
-    return filtered.slice(0, limit).map(s => `${signalEmoji(s.id, s.weight)} ${s.label}`);
+    return filtered.slice(0, limit).map(s => `${signalEmoji(s.id, s.weight)} ${shortSignalLabel(s.id, s.label)}`);
   }
 
   if (args.level === "MEDIUM") {
     // средние + высокие
-   return filtered.slice(0, limit).map(s => `${signalEmoji(s.id, s.weight)} ${s.label}`);
+   return filtered.slice(0, limit).map(s => `${signalEmoji(s.id, s.weight)} ${shortSignalLabel(s.id, s.label)}`);
   }
 
   // LOW — берём самые “мягкие” из имеющихся
-  return filtered.slice(-limit).map(s => `${signalEmoji(s.id, s.weight)} ${s.label}`);
+  return filtered.slice(-limit).map(s => `${signalEmoji(s.id, s.weight)} ${shortSignalLabel(s.id, s.label)}`);
 }
 function toTweetText(args: {
   chain: string;
