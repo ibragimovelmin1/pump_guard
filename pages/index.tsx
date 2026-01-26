@@ -81,9 +81,9 @@ function toTweetText(args: {
       ? `${args.tokenName}${args.tokenSymbol ? ` (${args.tokenSymbol})` : ""}`
       : args.tokenSymbol || "Token";
 
-  const shortAddr = args.tokenAddress
-    ? `${args.tokenAddress.slice(0, 4)}...${args.tokenAddress.slice(-4)}`
-    : "";
+  const contractBlock = args.tokenAddress
+  ? `Contract:\n${args.tokenAddress}\n`
+  : "";
 
   const signalsBlock =
     args.topSignals.length > 0
@@ -97,9 +97,9 @@ function toTweetText(args: {
     `Chain: ${args.chain.toUpperCase()}\n` +
     (args.confidence ? `Confidence: ${args.confidence}\n` : "") +
     `${signalsBlock}\n\n` +
-    (shortAddr ? `Contract:\n${shortAddr}\n\n` : "") +
-    `Not financial advice.\n` +
-    `${args.url}`
+    contractBlock +
+`\nNot financial advice.\n` +
+`${args.url}`
   );
 }
 
