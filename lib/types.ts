@@ -36,7 +36,7 @@ export type Signal = {
 export type ScoreResponse = {
   chain: Chain;
   input_type: InputType;
-  token?: { address: string; age_seconds?: number; holders?: number; top10_percent?: number; top_holders?: TopHolder[]; links?: { explorer: string } };
+  token?: { address: string; name?: string; symbol?: string; age_seconds?: number; holders?: number; top10_percent?: number; top_holders?: TopHolder[]; links?: { explorer: string } };
   dev?: { address: string; links?: { explorer: string } };
   dev_history?: DevHistory;
   risk: { score: number; level: RiskLevel; confidence: Confidence; mode: "DEMO" | "LIVE" };

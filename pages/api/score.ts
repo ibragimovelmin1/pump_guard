@@ -242,6 +242,20 @@ async function detectEarliestSigner(
   return signerStr
     ? { signer: signerStr, proofSig: sig, launchTs }
     : { proofSig: sig, launchTs };
+    async function heliusRpc<T>(body: any): Promise<T> {
+  const apiKey = process.env.HELIUS_API_KEY;
+  if (!apiKey) throw new Error("Missing HELIUS_API_KEY");
+
+  const url = `https://api-mainnet.helius-rpc.com/?api-key=${apiKey}`;
+  const resp = await fetch(url, {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify(body),
+  });
+  if (!resp.ok) throw new Error(`Helius RPC error ${resp.status}`);
+  const j = await resp.json();
+  return j?.result as T;
+}
 }
 
 /* =========================================================
@@ -419,7 +433,50 @@ async function solTokenSignals(
    API handler
    ========================================================= */
 
-export default async function handler(
+async function heliusRpc<T>(body: any): Promise<T> {
+  const apiKey = process.env.HELIUS_API_KEY;
+  if (!apiKey) throw new Error("Missing HELIUS_API_KEY");
+
+  const url = `https://api.mainnet.helius-rpc.com/?api-key=${apiKey}`;
+
+  const resp = await fetch(url, {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify(body),
+  });
+
+  if (!resp.ok) {
+    const txt = await resp.text();
+    throw new Error(`Helius RPC error ${resp.status}: ${txt.slice(0, 200)}`);
+  }
+
+  const j = await resp.json();
+  return j?.result as T;
+}
+   async function getTokenNameSymbolHelius(mint: string): Promise<{ name?: string; symbol?: string }> {
+try {
+const result = await heliusRpc<any>({
+jsonrpc: "2.0",
+id: "get-asset",
+method: "getAsset",
+params: { id: mint },
+});
+
+const name =
+result?.content?.metadata?.name ||
+result?.metadata?.name;
+
+const symbol =
+result?.content?.metadata?.symbol ||
+result?.token_info?.symbol ||
+result?.metadata?.symbol;
+
+return { name, symbol };
+} catch {
+return {};
+}
+}
+   export default async function handler(
   req: NextApiRequest,
   res: NextApiResponse<ScoreResponse | any>
 ) {
@@ -456,6 +513,8 @@ export default async function handler(
 
       const r = await solTokenSignals(conn, input);
       signals = r.signals;
+      
+      const tmeta = await getTokenNameSymbolHelius(input);
 
       score = computeScoreWithCaps(signals);
 
@@ -468,6 +527,8 @@ export default async function handler(
         input_type: "token",
         token: {
           address: input,
+          name: tmeta?.name,
+          symbol: tmeta?.symbol,
           age_seconds: r.meta.age_seconds,
           holders: r.meta.holders,
           top10_percent: r.meta.top10_percent,
