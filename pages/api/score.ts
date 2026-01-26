@@ -185,6 +185,37 @@ async function heliusRpc<T>(body: any): Promise<T> {
 async function getTokenNameSymbolHelius(
   mint: string
 ): Promise<{ name?: string; symbol?: string }> {
+  const apiKey = process.env.HELIUS_API_KEY;
+  if (!apiKey) return {};
+
+  // 1) Helius Token Metadata (лучше всего для SPL)
+  try {
+    const url = `https://api.helius.xyz/v0/token-metadata?api-key=${apiKey}`;
+    const resp = await fetch(url, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ mintAccounts: [mint] }),
+    });
+
+    if (resp.ok) {
+      const arr = (await resp.json()) as any[];
+      const t = arr?.[0];
+
+      const name =
+        t?.onChainMetadata?.metadata?.data?.name ||
+        t?.offChainMetadata?.metadata?.name;
+
+      const symbol =
+        t?.onChainMetadata?.metadata?.data?.symbol ||
+        t?.offChainMetadata?.metadata?.symbol;
+
+      if (name || symbol) return { name, symbol };
+    }
+  } catch {
+    // ignore
+  }
+
+  // 2) Fallback: DAS getAsset (как запасной вариант)
   try {
     const asset = await heliusRpc<any>({
       jsonrpc: "2.0",
