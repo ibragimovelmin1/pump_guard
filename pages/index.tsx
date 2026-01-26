@@ -62,7 +62,37 @@ const VERDICT_COPY: Record<VerdictLevel, { headline: string; bullets: string[]; 
     action: "Avoid or treat as extremely high risk.",
   },
 };
+function makeHashtags(args: {
+  chain?: string;
+  level?: "LOW" | "MEDIUM" | "HIGH";
+  tokenSymbol?: string;
+}) {
+  const tags = new Set<string>();
 
+  // базовые
+  tags.add("#PUMPGUARD");
+  tags.add("#Crypto");
+
+  // chain
+  const c = (args.chain || "").toLowerCase();
+  if (c === "sol") tags.add("#Solana");
+  if (c === "eth") tags.add("#Ethereum");
+  if (c === "bnb") tags.add("#BNBChain");
+
+  // risk level
+  if (args.level === "LOW") tags.add("#LowRisk");
+  if (args.level === "MEDIUM") tags.add("#MediumRisk");
+  if (args.level === "HIGH") tags.add("#HighRisk");
+
+  // token symbol (коротко и безопасно)
+  const sym = (args.tokenSymbol || "").trim().toUpperCase();
+  if (sym && sym.length <= 10 && /^[A-Z0-9_]+$/.test(sym)) {
+    tags.add(`#${sym}`);
+  }
+
+  // ограничим длину (чтобы не раздувать твит)
+  return Array.from(tags).slice(0, 5).join(" ");
+}
 function toTweetText(args: {
   chain: string;
   score: number;
@@ -89,7 +119,11 @@ function toTweetText(args: {
     args.topSignals.length > 0
       ? `\nWHY:\n• ${args.topSignals.join("\n• ")}`
       : "";
-
+const hashtags = makeHashtags({
+    chain: args.chain,
+    level: args.level,
+    tokenSymbol: args.tokenSymbol,
+  });
   return (
     `Checked with PUMP.GUARD\n\n` +
     `${emoji} ${title}\n` +
@@ -99,7 +133,8 @@ function toTweetText(args: {
     `${signalsBlock}\n\n` +
     contractBlock +
 `\nNot financial advice.\n` +
-`${args.url}`
+ `${args.url}\n\n` +
+    `${hashtags}`
   );
 }
 
