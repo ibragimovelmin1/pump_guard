@@ -334,6 +334,19 @@ export default function Home() {
     if (data.signals.find(s => s.id === "DEV_HOLDS_GT_30")) return { txt: "30%", pts: 10 };
     return null;
   }
+  const tokenTitle = useMemo(() => {
+  if (!data?.token) return null;
+
+  const name = data.token.name?.trim();
+  const symbol = data.token.symbol?.trim();
+
+  if (name && symbol) return `${name} (${symbol})`;
+  if (name) return name;
+  if (symbol) return symbol;
+
+  const addr = data.token.address;
+  return addr ? `${addr.slice(0, 4)}...${addr.slice(-4)}` : null;
+}, [data?.token?.name, data?.token?.symbol, data?.token?.address]);
 
   return (
     <>
@@ -395,7 +408,15 @@ export default function Home() {
             </div>
 
             <hr />
-
+           {tokenTitle && (
+              <>
+                <div className="small">Token</div>
+                <div style={{ fontWeight: 900, fontSize: 18 }}>
+                  {tokenTitle}
+                </div>
+                <div style={{ height: 10 }} />
+              </>
+            )}
             <div className="small">Dev wallet</div>
             <div style={{ wordBreak: "break-all" }}>{data?.dev?.address ?? "—"}</div>
 
