@@ -500,7 +500,47 @@ async function solTokenSignals(
       proof: [explorerToken("sol", mint)],
     } as any);
   }
+ /* ---------- Dev holds (DISTRIBUTION, dynamic) ---------- */
+  // UI ждёт: DEV_HOLDS_GT_30 / DEV_HOLDS_GT_50
 
+  const devAddr = meta.dev_candidate;
+  const supplyUiNum = typeof meta.supply_ui === "number" ? meta.supply_ui : undefined;
+
+  if (devAddr && supplyUiNum && supplyUiNum > 0) {
+    try {
+      const devPk = new PublicKey(devAddr);
+
+      const devAccounts = await conn.getParsedTokenAccountsByOwner(devPk, { mint: mintPk });
+
+      let devAmountUi = 0;
+      for (const acc of devAccounts.value as any[]) {
+        const ui = acc?.account?.data?.parsed?.info?.tokenAmount?.uiAmount;
+        if (typeof ui === "number") devAmountUi += ui;
+      }
+
+      const devPct = (devAmountUi / supplyUiNum) * 100;
+
+      if (devPct > 50) {
+        addSignal({
+          id: "DEV_HOLDS_GT_50",
+          label: "Dev wallet holds a very large share of supply",
+          value: `dev=${devPct.toFixed(1)}%`,
+          weight: 15,
+          proof: [explorerAddress("sol", devAddr), explorerToken("sol", mint)],
+        } as any);
+      } else if (devPct > 30) {
+        addSignal({
+          id: "DEV_HOLDS_GT_30",
+          label: "Dev wallet holds a large share of supply",
+          value: `dev=${devPct.toFixed(1)}%`,
+          weight: 10,
+          proof: [explorerAddress("sol", devAddr), explorerToken("sol", mint)],
+        } as any);
+      }
+    } catch {
+      // ignore
+    }
+  }
   return { signals, meta };
 }
 
