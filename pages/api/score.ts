@@ -59,7 +59,7 @@ async function getTokenAgeSeconds(conn: Connection, mintPk: PublicKey) {
   let before: string | undefined = undefined;
   let oldestBt: number | null = null;
 
-  const MAX_PAGES = 60;                 // было 8
+  const MAX_PAGES = 10;                 // было 8
   const STOP_DAYS = 200;                // early stop
 
   for (let page = 0; page < MAX_PAGES; page++) {
