@@ -5,7 +5,7 @@ import type {
   Signal,
   Chain,
   Confidence,
-  RiskLevel
+  RiskLevel,
 } from "../../lib/types";
 import { normalizeChain } from "../../lib/detect";
 import { explorerAddress, explorerToken } from "../../lib/explorer";
@@ -71,7 +71,7 @@ const CATEGORY_MAX: Record<RiskCategory, number> = {
   LIQUIDITY: 10,
   DEV_CONTRACT: 30,
   TX_PATTERNS: 20,
-  CONTEXT: 0
+  CONTEXT: 0,
 };
 
 function categorizeSignalId(id: string): RiskCategory {
@@ -124,7 +124,7 @@ function computeScoreWithCaps(signals: Signal[]) {
     LIQUIDITY: 0,
     DEV_CONTRACT: 0,
     TX_PATTERNS: 0,
-    CONTEXT: 0
+    CONTEXT: 0,
   };
 
   for (const s of signals) {
@@ -134,7 +134,7 @@ function computeScoreWithCaps(signals: Signal[]) {
   }
 
   let score = 0;
-  (Object.keys(totals) as RiskCategory[]).forEach(cat => {
+  (Object.keys(totals) as RiskCategory[]).forEach((cat) => {
     score += clamp(totals[cat], 0, CATEGORY_MAX[cat]);
   });
 
@@ -154,6 +154,60 @@ type SolTokenMeta = {
   mint_authority_present?: boolean;
   freeze_authority_present?: boolean;
 };
+
+/* =========================================================
+   Helius RPC helper (single source of truth)
+   ========================================================= */
+
+async function heliusRpc<T>(body: any): Promise<T> {
+  const apiKey = process.env.HELIUS_API_KEY;
+  if (!apiKey) throw new Error("Missing HELIUS_API_KEY");
+
+  // ✅ correct domain is api-mainnet.helius-rpc.com (dash, not dot)
+  const url = `https://api-mainnet.helius-rpc.com/?api-key=${apiKey}`;
+
+  const resp = await fetch(url, {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify(body),
+  });
+
+  if (!resp.ok) {
+    const txt = await resp.text();
+    throw new Error(`Helius RPC error ${resp.status}: ${txt.slice(0, 200)}`);
+  }
+
+  const j = await resp.json();
+  if (j?.error) throw new Error(j.error?.message || "Helius RPC returned error");
+  return j?.result as T;
+}
+
+async function getTokenNameSymbolHelius(
+  mint: string
+): Promise<{ name?: string; symbol?: string }> {
+  try {
+    const asset = await heliusRpc<any>({
+      jsonrpc: "2.0",
+      id: "get-asset",
+      method: "getAsset",
+      params: { id: mint },
+    });
+
+    const name =
+      asset?.content?.metadata?.name ??
+      asset?.metadata?.name ??
+      asset?.token_info?.name;
+
+    const symbol =
+      asset?.content?.metadata?.symbol ??
+      asset?.token_info?.symbol ??
+      asset?.metadata?.symbol;
+
+    return { name, symbol };
+  } catch {
+    return {};
+  }
+}
 
 /* =========================================================
    Age: Helius (fast + deeper history) with fallback
@@ -183,7 +237,10 @@ async function getTokenAgeSecondsFallback(conn: Connection, mintPk: PublicKey) {
 
   const MAX_PAGES = 8; // keep it fast
   for (let page = 0; page < MAX_PAGES; page++) {
-    const sigs = await conn.getSignaturesForAddress(mintPk, { limit: 1000, before });
+    const sigs = await conn.getSignaturesForAddress(mintPk, {
+      limit: 1000,
+      before,
+    });
     if (sigs.length === 0) break;
 
     const last = sigs[sigs.length - 1];
@@ -229,33 +286,20 @@ async function detectEarliestSigner(
   if (!bt && oldest.slot) bt = await conn.getBlockTime(oldest.slot);
 
   const launchTs = bt ?? undefined;
+
   const tx = await conn.getParsedTransaction(sig, {
-    maxSupportedTransactionVersion: 0
+    maxSupportedTransactionVersion: 0,
   });
 
   if (!tx) return { proofSig: sig, launchTs };
 
   const keys: any[] = (tx.transaction.message as any).accountKeys || [];
-  const signer = keys.find(k => k.signer);
+  const signer = keys.find((k) => k.signer);
   const signerStr = signer?.pubkey?.toString?.() || signer?.toString?.();
 
   return signerStr
     ? { signer: signerStr, proofSig: sig, launchTs }
     : { proofSig: sig, launchTs };
-    async function heliusRpc<T>(body: any): Promise<T> {
-  const apiKey = process.env.HELIUS_API_KEY;
-  if (!apiKey) throw new Error("Missing HELIUS_API_KEY");
-
-  const url = `https://api-mainnet.helius-rpc.com/?api-key=${apiKey}`;
-  const resp = await fetch(url, {
-    method: "POST",
-    headers: { "content-type": "application/json" },
-    body: JSON.stringify(body),
-  });
-  if (!resp.ok) throw new Error(`Helius RPC error ${resp.status}`);
-  const j = await resp.json();
-  return j?.result as T;
-}
 }
 
 /* =========================================================
@@ -271,7 +315,7 @@ async function solTokenSignals(
     signals.push({
       ...s,
       weight: Number((s as any).weight) || 0,
-      proof: Array.isArray((s as any).proof) ? (s as any).proof : []
+      proof: Array.isArray((s as any).proof) ? (s as any).proof : [],
     } as any);
   };
 
@@ -296,7 +340,7 @@ async function solTokenSignals(
       label: "Mint authority is still present (supply can be increased)",
       value: mintAuth,
       weight: 5,
-      proof: [explorerToken("sol", mint)]
+      proof: [explorerToken("sol", mint)],
     } as any);
   }
 
@@ -306,7 +350,7 @@ async function solTokenSignals(
       label: "Freeze authority is present (accounts can be frozen)",
       value: freezeAuth,
       weight: 5,
-      proof: [explorerToken("sol", mint)]
+      proof: [explorerToken("sol", mint)],
     } as any);
   }
 
@@ -335,7 +379,7 @@ async function solTokenSignals(
         label: "Top holders concentration is extreme",
         value: `top10=${top10Percent.toFixed(1)}%`,
         weight: 15,
-        proof: [explorerToken("sol", mint)]
+        proof: [explorerToken("sol", mint)],
       } as any);
     } else if (top10Percent > 60) {
       addSignal({
@@ -343,7 +387,7 @@ async function solTokenSignals(
         label: "Top holders concentration is high",
         value: `top10=${top10Percent.toFixed(1)}%`,
         weight: 10,
-        proof: [explorerToken("sol", mint)]
+        proof: [explorerToken("sol", mint)],
       } as any);
     } else if (top10Percent > 40) {
       addSignal({
@@ -351,7 +395,7 @@ async function solTokenSignals(
         label: "Top holders concentration is elevated",
         value: `top10=${top10Percent.toFixed(1)}%`,
         weight: 5,
-        proof: [explorerToken("sol", mint)]
+        proof: [explorerToken("sol", mint)],
       } as any);
     }
   }
@@ -362,7 +406,7 @@ async function solTokenSignals(
     label: "LP status unknown (not detected yet)",
     value: "",
     weight: 0,
-    proof: [explorerToken("sol", mint)]
+    proof: [explorerToken("sol", mint)],
   } as any);
 
   /* ---------- Age (META only) ---------- */
@@ -403,7 +447,7 @@ async function solTokenSignals(
       label: `Dev wallet candidate (${reason})`,
       value: dev,
       weight: 0,
-      proof: devProof
+      proof: devProof,
     } as any);
 
     if (reason === "earliestSigner" && signerDev) {
@@ -412,7 +456,7 @@ async function solTokenSignals(
         label: "Dev was earliest signer (possible deployer/initiator)",
         value: signerDev,
         weight: 0,
-        proof: devProof
+        proof: devProof,
       } as any);
     }
   } else {
@@ -422,7 +466,7 @@ async function solTokenSignals(
       label: "Dev wallet candidate not found",
       value: "",
       weight: 0,
-      proof: [explorerToken("sol", mint)]
+      proof: [explorerToken("sol", mint)],
     } as any);
   }
 
@@ -433,50 +477,7 @@ async function solTokenSignals(
    API handler
    ========================================================= */
 
-async function heliusRpc<T>(body: any): Promise<T> {
-  const apiKey = process.env.HELIUS_API_KEY;
-  if (!apiKey) throw new Error("Missing HELIUS_API_KEY");
-
-  const url = `https://api.mainnet.helius-rpc.com/?api-key=${apiKey}`;
-
-  const resp = await fetch(url, {
-    method: "POST",
-    headers: { "content-type": "application/json" },
-    body: JSON.stringify(body),
-  });
-
-  if (!resp.ok) {
-    const txt = await resp.text();
-    throw new Error(`Helius RPC error ${resp.status}: ${txt.slice(0, 200)}`);
-  }
-
-  const j = await resp.json();
-  return j?.result as T;
-}
-   async function getTokenNameSymbolHelius(mint: string): Promise<{ name?: string; symbol?: string }> {
-try {
-const result = await heliusRpc<any>({
-jsonrpc: "2.0",
-id: "get-asset",
-method: "getAsset",
-params: { id: mint },
-});
-
-const name =
-result?.content?.metadata?.name ||
-result?.metadata?.name;
-
-const symbol =
-result?.content?.metadata?.symbol ||
-result?.token_info?.symbol ||
-result?.metadata?.symbol;
-
-return { name, symbol };
-} catch {
-return {};
-}
-}
-   export default async function handler(
+export default async function handler(
   req: NextApiRequest,
   res: NextApiResponse<ScoreResponse | any>
 ) {
@@ -513,12 +514,18 @@ return {};
 
       const r = await solTokenSignals(conn, input);
       signals = r.signals;
-      
+
+      // ✅ fetch name/symbol via Helius DAS (getAsset)
       const tmeta = await getTokenNameSymbolHelius(input);
 
       score = computeScoreWithCaps(signals);
 
-      if (r.meta.age_seconds && r.meta.top10_percent && r.meta.dev_candidate && process.env.HELIUS_API_KEY) {
+      if (
+        r.meta.age_seconds &&
+        r.meta.top10_percent &&
+        r.meta.dev_candidate &&
+        process.env.HELIUS_API_KEY
+      ) {
         confidence = "HIGH";
       }
 
@@ -527,27 +534,27 @@ return {};
         input_type: "token",
         token: {
           address: input,
-          name: tmeta?.name,
-          symbol: tmeta?.symbol,
+         name: tmeta?.name ?? undefined,
+         symbol: tmeta?.symbol ?? undefined,  
           age_seconds: r.meta.age_seconds,
           holders: r.meta.holders,
           top10_percent: r.meta.top10_percent,
-          links: { explorer: explorerToken("sol", input) }
+          links: { explorer: explorerToken("sol", input) },
         },
         dev: r.meta.dev_candidate
           ? {
               address: r.meta.dev_candidate,
-              links: { explorer: explorerAddress("sol", r.meta.dev_candidate) }
+              links: { explorer: explorerAddress("sol", r.meta.dev_candidate) },
             }
           : undefined,
         risk: {
           score,
           level: levelFromScore(score),
           confidence,
-          mode
+          mode,
         },
         signals,
-        community: { rugged: 0, sus: 0, trusted: 0, recent: [] }
+        community: { rugged: 0, sus: 0, trusted: 0, recent: [] },
       };
 
       cacheSet(cacheKey, response);
@@ -558,14 +565,14 @@ return {};
       id: "LIVE_ERROR",
       label: "Live scoring failed, falling back to demo",
       value: String(e?.message || e),
-      weight: 0
+      weight: 0,
     } as any);
   }
 
   signals.push({
     id: "DEMO_MODE",
     label: "Demo mode (missing RPC or API keys)",
-    weight: 0
+    weight: 0,
   } as any);
 
   const response: ScoreResponse = {
@@ -575,10 +582,10 @@ return {};
       score: clamp(score, 0, 100),
       level: levelFromScore(score),
       confidence,
-      mode
+      mode,
     },
     signals,
-    community: { rugged: 0, sus: 0, trusted: 0, recent: [] }
+    community: { rugged: 0, sus: 0, trusted: 0, recent: [] },
   };
 
   cacheSet(cacheKey, response);
