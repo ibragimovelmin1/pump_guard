@@ -486,47 +486,60 @@ export default function Home() {
   /* ---------- Main request ---------- */
   async function run() {
   async function loadHoldersSol(mint: string) {
+  const runId = Date.now();
+  (loadHoldersSol as any)._runId = runId;
+
   try {
     setHoldersLoading(true);
 
     // reset progress
-    setHoldersSoFar(null);
-    setHoldersPages(null);
+    if (typeof setHoldersSoFar === "function") setHoldersSoFar(null);
+    if (typeof setHoldersPages === "function") setHoldersPages(null);
+
+    const m = encodeURIComponent(mint);
 
     // start job
-    await fetch(`/api/holders?mint=${encodeURIComponent(mint)}&action=start`).catch(() => {});
+    await fetch(`/api/holders?mint=${m}&action=start`).catch(() => {});
 
-    const MAX_STEPS = 120; // ⬅ увеличили, иначе обрывается
+    const MAX_STEPS = 120;
+    const DELAY_MS = 350;
+
     for (let i = 0; i < MAX_STEPS; i++) {
-      const r = await fetch(`/api/holders?mint=${encodeURIComponent(mint)}&action=step`);
-      const j = await r.json();
+      if ((loadHoldersSol as any)._runId !== runId) return;
 
-      // ✅ ПРОГРЕСС (ВОТ ТО, ЧЕГО У ТЕБЯ НЕ БЫЛО)
-      if (j?.status === "running") {
+      const r = await fetch(`/api/holders?mint=${m}&action=step`);
+      const j = await r.json().catch(() => null);
+
+      if (!j) {
+        await new Promise(res => setTimeout(res, DELAY_MS));
+        continue;
+      }
+
+      // progress
+      if (j.status === "running") {
         if (typeof j.holders_so_far === "number") setHoldersSoFar(j.holders_so_far);
         if (typeof j.pages === "number") setHoldersPages(j.pages);
       }
 
-      if (j?.status === "done") {
+      if (j.status === "done") {
         const holders = Number(j.holders);
         if (Number.isFinite(holders)) {
           setData(prev => {
             if (!prev?.token) return prev;
-            return {
-              ...prev,
-              token: { ...prev.token, holders },
-            };
+            return { ...prev, token: { ...prev.token, holders } };
           });
         }
         return;
       }
 
-      if (j?.status === "error") return;
+      if (j.status === "error") return;
 
-      await new Promise(res => setTimeout(res, 350));
+      await new Promise(res => setTimeout(res, DELAY_MS));
     }
   } finally {
-    setHoldersLoading(false);
+    if ((loadHoldersSol as any)._runId === runId) {
+      setHoldersLoading(false);
+    }
   }
 }
     setLoading(true);
