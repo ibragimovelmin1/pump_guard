@@ -408,6 +408,8 @@ export default function Home() {
   const [loading, setLoading] = useState(false);
   const [deepLoading, setDeepLoading] = useState(false);
   const [holdersLoading, setHoldersLoading] = useState(false);
+  const [holdersSoFar, setHoldersSoFar] = useState<number | null>(null);
+  const [holdersPages, setHoldersPages] = useState<number | null>(null);
   const [data, setData] = useState<ScoreResponse | null>(null);
   const [deepSignals, setDeepSignals] = useState<Signal[]>([]);
   const [error, setError] = useState("");
@@ -483,33 +485,45 @@ export default function Home() {
 
   /* ---------- Main request ---------- */
   async function run() {
-    async function loadHoldersSol(mint: string) {
+  async function loadHoldersSol(mint: string) {
   try {
     setHoldersLoading(true);
+
+    // reset progress
+    setHoldersSoFar(null);
+    setHoldersPages(null);
 
     // start job
     await fetch(`/api/holders?mint=${encodeURIComponent(mint)}&action=start`).catch(() => {});
 
-    // poll until done
-    const MAX_STEPS = 60;
+    const MAX_STEPS = 120; // ⬅ увеличили, иначе обрывается
     for (let i = 0; i < MAX_STEPS; i++) {
       const r = await fetch(`/api/holders?mint=${encodeURIComponent(mint)}&action=step`);
       const j = await r.json();
 
-      if (j?.status === "done" && typeof j.holders === "number") {
-        setData(prev => {
-          if (!prev?.token) return prev;
-          return {
-            ...prev,
-            token: { ...prev.token, holders: j.holders },
-          };
-        });
+      // ✅ ПРОГРЕСС (ВОТ ТО, ЧЕГО У ТЕБЯ НЕ БЫЛО)
+      if (j?.status === "running") {
+        if (typeof j.holders_so_far === "number") setHoldersSoFar(j.holders_so_far);
+        if (typeof j.pages === "number") setHoldersPages(j.pages);
+      }
+
+      if (j?.status === "done") {
+        const holders = Number(j.holders);
+        if (Number.isFinite(holders)) {
+          setData(prev => {
+            if (!prev?.token) return prev;
+            return {
+              ...prev,
+              token: { ...prev.token, holders },
+            };
+          });
+        }
         return;
       }
 
       if (j?.status === "error") return;
 
-      await new Promise(res => setTimeout(res, 250));
+      await new Promise(res => setTimeout(res, 350));
     }
   } finally {
     setHoldersLoading(false);
