@@ -10,11 +10,25 @@ type RiskLevel = "LOW" | "MEDIUM" | "HIGH";
 
 function RiskBadge({ level }: { level: RiskLevel | string }) {
   const emoji = level === "HIGH" ? "🔴" : level === "MEDIUM" ? "🟡" : "🟢";
-  return <span className="badge">{emoji} {String(level)}</span>;
+  return (
+    <span className="badge">
+      {emoji} {String(level)}
+    </span>
+  );
+}
+
+// Confidence is "trust" not "risk": HIGH = green, LOW = red
+function ConfidenceBadge({ level }: { level: RiskLevel | string }) {
+  const emoji = level === "HIGH" ? "🟢" : level === "MEDIUM" ? "🟡" : "🔴";
+  return (
+    <span className="badge">
+      {emoji} {String(level)}
+    </span>
+  );
 }
 
 function formatAge(sec?: number) {
-  if (!sec && sec !== 0) return "—";
+  if (sec === undefined || sec === null) return "—";
   if (sec < 60) return "<1m";
   const m = Math.floor(sec / 60);
   if (m < 60) return `${m}m`;
@@ -22,6 +36,58 @@ function formatAge(sec?: number) {
   if (h < 48) return `${h}h`;
   const d = Math.floor(h / 24);
   return `${d}d`;
+}
+
+function formatHolders(v: any) {
+  if (typeof v === "number" && Number.isFinite(v)) return v.toLocaleString();
+  return "—";
+}
+
+function getProofLinksFromSignal(s: any): { label?: string; url: string }[] {
+  const pl = Array.isArray(s?.proofLinks) ? s.proofLinks : null;
+  if (pl && pl.length) {
+    return pl
+      .filter((x: any) => x && typeof x.url === "string")
+      .map((x: any) => ({ label: x.label, url: x.url }));
+  }
+
+  // fallback to old `proof: string[]`
+  const p = Array.isArray(s?.proof) ? s.proof : null;
+  if (p && p.length) {
+    return p
+      .filter((u: any) => typeof u === "string")
+      .map((url: string) => {
+        let label = "Proof";
+        if (url.includes("solscan.io")) label = "Solscan";
+        else if (url.includes("solana.fm")) label = "SolanaFM";
+        else if (url.includes("birdeye.so")) label = "Birdeye";
+        return { label, url };
+      });
+  }
+
+  return [];
+}
+
+function ProofLinksRow({ signal }: { signal: any }) {
+  const links = getProofLinksFromSignal(signal);
+  if (!links.length) return null;
+
+  return (
+    <div className="row" style={{ gap: 10, flexWrap: "wrap", justifyContent: "flex-end" }}>
+      {links.slice(0, 3).map((l) => (
+        <a
+          key={l.url}
+          href={l.url}
+          target="_blank"
+          rel="noreferrer"
+          className="small"
+          style={{ textDecoration: "underline", opacity: 0.85 }}
+        >
+          {l.label || "Proof"}
+        </a>
+      ))}
+    </div>
+  );
 }
 
 /* =========================
@@ -62,6 +128,7 @@ const VERDICT_COPY: Record<VerdictLevel, { headline: string; bullets: string[]; 
     action: "Avoid or treat as extremely high risk.",
   },
 };
+
 function makeHashtags(args: {
   chain?: string;
   level?: "LOW" | "MEDIUM" | "HIGH";
@@ -69,39 +136,33 @@ function makeHashtags(args: {
 }) {
   const tags = new Set<string>();
 
-  // базовые
   tags.add("#PUMPGUARD");
   tags.add("#Crypto");
 
-  // chain
   const c = (args.chain || "").toLowerCase();
   if (c === "sol") tags.add("#Solana");
   if (c === "eth") tags.add("#Ethereum");
   if (c === "bnb") tags.add("#BNBChain");
 
-  // risk level
   if (args.level === "LOW") tags.add("#LowRisk");
   if (args.level === "MEDIUM") tags.add("#MediumRisk");
   if (args.level === "HIGH") tags.add("#HighRisk");
 
-  // token symbol (коротко и безопасно)
   const sym = (args.tokenSymbol || "").trim().toUpperCase();
   if (sym && sym.length <= 10 && /^[A-Z0-9_]+$/.test(sym)) {
     tags.add(`#${sym}`);
   }
 
-  // ограничим длину (чтобы не раздувать твит)
   return Array.from(tags).slice(0, 5).join(" ");
 }
+
 function signalEmoji(id: string, weight?: number) {
   const x = String(id || "").toUpperCase();
   const w = Number(weight ?? 0) || 0;
 
-  // TX patterns (обычно самые жесткие)
   if (x.includes("DEV_DUMP") || x.includes("BUNDLED") || x.includes("MEV") || x.includes("CLUSTER"))
     return w >= 10 ? "🔥" : "💣";
 
-  // DEV / CONTRACT
   if (x.includes("BLACKLIST") || x.includes("TRANSFER_BLOCK"))
     return "⛔";
   if (x.includes("HIGH_TAX") || x.includes("TAX"))
@@ -109,24 +170,22 @@ function signalEmoji(id: string, weight?: number) {
   if (x.includes("NONSTANDARD") || x.includes("HOOK"))
     return "🧩";
 
-  // PERMISSIONS
   if (x.includes("MINT_AUTHORITY"))
     return "⚠️";
   if (x.includes("FREEZE_AUTHORITY"))
     return "🧊";
 
-  // DISTRIBUTION
   if (x.startsWith("TOP10_"))
     return w >= 10 ? "🐋" : "📊";
   if (x.startsWith("DEV_HOLDS_"))
     return "👤";
 
-  // LIQUIDITY
   if (x.startsWith("LP_"))
     return "💧";
 
   return "⚠️";
 }
+
 function shortSignalLabel(id: string, label: string) {
   const x = id.toUpperCase();
 
@@ -143,9 +202,9 @@ function shortSignalLabel(id: string, label: string) {
 
   if (x.startsWith("LP_")) return "LP risk";
 
-  // fallback — если не распознали
   return label;
 }
+
 function pickSmartSignals(args: {
   signals: { id: string; label: string; weight?: number }[];
   level: "LOW" | "MEDIUM" | "HIGH";
@@ -167,22 +226,19 @@ function pickSmartSignals(args: {
     return (Number(s.weight ?? 0) || 0) > 0;
   });
 
-  // сортировка по весу
   filtered.sort((a, b) => (Number(b.weight ?? 0) || 0) - (Number(a.weight ?? 0) || 0));
 
   if (args.level === "HIGH") {
-    // самые опасные
     return filtered.slice(0, limit).map(s => `${signalEmoji(s.id, s.weight)} ${shortSignalLabel(s.id, s.label)}`);
   }
 
   if (args.level === "MEDIUM") {
-    // средние + высокие
-   return filtered.slice(0, limit).map(s => `${signalEmoji(s.id, s.weight)} ${shortSignalLabel(s.id, s.label)}`);
+    return filtered.slice(0, limit).map(s => `${signalEmoji(s.id, s.weight)} ${shortSignalLabel(s.id, s.label)}`);
   }
 
-  // LOW — берём самые “мягкие” из имеющихся
   return filtered.slice(-limit).map(s => `${signalEmoji(s.id, s.weight)} ${shortSignalLabel(s.id, s.label)}`);
 }
+
 function toTweetText(args: {
   chain: string;
   score: number;
@@ -202,18 +258,20 @@ function toTweetText(args: {
       : args.tokenSymbol || "Token";
 
   const contractBlock = args.tokenAddress
-  ? `Contract:\n${args.tokenAddress}\n`
-  : "";
+    ? `Contract:\n${args.tokenAddress}\n`
+    : "";
 
   const signalsBlock =
     args.topSignals.length > 0
       ? `\nWHY:\n• ${args.topSignals.join("\n• ")}`
       : "";
-const hashtags = makeHashtags({
+
+  const hashtags = makeHashtags({
     chain: args.chain,
     level: args.level,
     tokenSymbol: args.tokenSymbol,
   });
+
   return (
     `Checked with PUMP.GUARD\n\n` +
     `${emoji} ${title}\n` +
@@ -222,8 +280,8 @@ const hashtags = makeHashtags({
     (args.confidence ? `Confidence: ${args.confidence}\n` : "") +
     `${signalsBlock}\n\n` +
     contractBlock +
-`\nNot financial advice.\n` +
- `${args.url}\n\n` +
+    `\nNot financial advice.\n` +
+    `${args.url}\n\n` +
     `${hashtags}`
   );
 }
@@ -254,16 +312,10 @@ type SignalCategory = "PERMISSIONS" | "DISTRIBUTION" | "LIQUIDITY" | "DEV_CONTRA
 function categorizeSignalId(id: string): SignalCategory | null {
   const x = String(id || "").toUpperCase();
 
-  // PERMISSIONS
   if (x.includes("MINT_AUTHORITY") || x.includes("FREEZE_AUTHORITY")) return "PERMISSIONS";
-
-  // DISTRIBUTION
   if (x.startsWith("TOP10_") || x.startsWith("DEV_HOLDS_")) return "DISTRIBUTION";
-
-  // LIQUIDITY
   if (x.startsWith("LP_")) return "LIQUIDITY";
 
-  // DEV / CONTRACT
   if (
     x.includes("BLACKLIST") ||
     x.includes("TRANSFER_BLOCK") ||
@@ -272,7 +324,6 @@ function categorizeSignalId(id: string): SignalCategory | null {
     x.includes("HOOK")
   ) return "DEV_CONTRACT";
 
-  // TX PATTERNS
   if (x.includes("DEV_DUMP") || x.includes("BUNDLED") || x.includes("MEV") || x.includes("CLUSTER")) return "TX_PATTERNS";
 
   return null;
@@ -302,7 +353,6 @@ function sumByCategory(signals: { id: string; weight?: any }[]) {
     buckets[cat] += w;
   }
 
-  // Clamp to caps (important)
   (Object.keys(buckets) as SignalCategory[]).forEach(cat => {
     buckets[cat] = Math.max(0, Math.min(CATEGORY_CAP[cat], buckets[cat]));
   });
@@ -329,8 +379,8 @@ const WHY_GROUPS: { title: string; cap: number; rows: WhyRow[] }[] = [
     title: "DISTRIBUTION",
     cap: 30,
     rows: [
-      { id: "TOP10_DYNAMIC", label: "Top-10 holders >", points: 0 }, // dynamic 40/60/80
-      { id: "DEV_HOLDS_DYNAMIC", label: "Dev wallet holds >", points: 0 }, // dynamic 30/50
+      { id: "TOP10_DYNAMIC", label: "Top-10 holders >", points: 0 },
+      { id: "DEV_HOLDS_DYNAMIC", label: "Dev wallet holds >", points: 0 },
     ],
   },
   {
@@ -351,12 +401,11 @@ const WHY_GROUPS: { title: string; cap: number; rows: WhyRow[] }[] = [
       { id: "NONSTANDARD_TRANSFER", label: "Non-standard transfer logic / hooks", points: 5 },
     ],
   },
-   {
+  {
     title: "LIQUIDITY (LP)",
     cap: 10,
     rows: [{ id: "LP_NOT_BURNED", label: "LP not burned / unlocked", points: 10 }],
   },
-  
 ];
 
 /* =========================
@@ -464,31 +513,32 @@ export default function Home() {
   /* ---------- Dynamic rows ---------- */
   function resolveTop10() {
     if (!data) return null;
-    if (data.signals.find(s => s.id === "TOP10_GT_80")) return { txt: "80%", pts: 15 };
-    if (data.signals.find(s => s.id === "TOP10_GT_60")) return { txt: "60%", pts: 10 };
-    if (data.signals.find(s => s.id === "TOP10_GT_40")) return { txt: "40%", pts: 5 };
+    if (data.signals.find(s => s.id === "TOP10_GT_80")) return { txt: "80%", pts: 15, id: "TOP10_GT_80" };
+    if (data.signals.find(s => s.id === "TOP10_GT_60")) return { txt: "60%", pts: 10, id: "TOP10_GT_60" };
+    if (data.signals.find(s => s.id === "TOP10_GT_40")) return { txt: "40%", pts: 5, id: "TOP10_GT_40" };
     return null;
   }
 
   function resolveDevHolds() {
     if (!data) return null;
-    if (data.signals.find(s => s.id === "DEV_HOLDS_GT_50")) return { txt: "50%", pts: 15 };
-    if (data.signals.find(s => s.id === "DEV_HOLDS_GT_30")) return { txt: "30%", pts: 10 };
+    if (data.signals.find(s => s.id === "DEV_HOLDS_GT_50")) return { txt: "50%", pts: 15, id: "DEV_HOLDS_GT_50" };
+    if (data.signals.find(s => s.id === "DEV_HOLDS_GT_30")) return { txt: "30%", pts: 10, id: "DEV_HOLDS_GT_30" };
     return null;
   }
+
   const tokenTitle = useMemo(() => {
-  if (!data?.token) return null;
+    if (!data?.token) return null;
 
-  const name = data.token.name?.trim();
-  const symbol = data.token.symbol?.trim();
+    const name = data.token.name?.trim();
+    const symbol = data.token.symbol?.trim();
 
-  if (name && symbol) return `${name} (${symbol})`;
-  if (name) return name;
-  if (symbol) return symbol;
+    if (name && symbol) return `${name} (${symbol})`;
+    if (name) return name;
+    if (symbol) return symbol;
 
-  const addr = data.token.address;
-  return addr ? `${addr.slice(0, 4)}...${addr.slice(-4)}` : null;
-}, [data?.token?.name, data?.token?.symbol, data?.token?.address]);
+    const addr = data.token.address;
+    return addr ? `${addr.slice(0, 4)}...${addr.slice(-4)}` : null;
+  }, [data?.token?.name, data?.token?.symbol, data?.token?.address]);
 
   return (
     <>
@@ -501,16 +551,13 @@ export default function Home() {
         </div>
       </div>
 
-      {/* small css helper for 3-column row */}
       <style jsx>{`
         .grid3 { display: grid; grid-template-columns: 1fr; gap: 14px; }
         @media(min-width: 900px){ .grid3 { grid-template-columns: 1fr 1fr 1fr; } }
       `}</style>
 
       <main className="wrap" style={{ padding: "22px 0 40px" }}>
-        {/* TOP */}
         <div className="grid">
-          {/* INPUT */}
           <div className="card">
             <h1 style={{ margin: "0 0 8px" }}>Check the risk before you buy</h1>
             <div className="small">Paste a token or dev wallet. Chain auto-detect supported.</div>
@@ -540,7 +587,6 @@ export default function Home() {
             </div>
           </div>
 
-          {/* RISK */}
           <div className="card">
             <div className="row" style={{ justifyContent: "space-between" }}>
               <div className="badge">{data?.chain?.toUpperCase() ?? "—"}</div>
@@ -550,7 +596,8 @@ export default function Home() {
             </div>
 
             <hr />
-           {tokenTitle && (
+
+            {tokenTitle && (
               <>
                 <div className="small">Token</div>
                 <div style={{ fontWeight: 900, fontSize: 18 }}>
@@ -559,32 +606,33 @@ export default function Home() {
                 <div style={{ height: 10 }} />
               </>
             )}
+
             <div className="small">Dev wallet</div>
-<div style={{ wordBreak: "break-all" }}>{data?.dev?.address ?? "—"}</div>
+            <div style={{ wordBreak: "break-all" }}>{data?.dev?.address ?? "—"}</div>
 
-<div style={{ height: 8 }} />
+            <div style={{ height: 8 }} />
 
-<div className="small">Token age</div>
-<div>{formatAge(data?.token?.age_seconds)}</div>
+            <div className="small">Token age</div>
+            <div>{formatAge(data?.token?.age_seconds)}</div>
 
-<div style={{ height: 8 }} />
+            <div style={{ height: 8 }} />
 
-<div className="small">Holders</div>
-<div>{data?.token?.holders ?? "—"}</div>
+            <div className="small">Holders</div>
+            <div>{formatHolders((data as any)?.token?.holders)}</div>
 
-<div style={{ height: 10 }} />
+            <div style={{ height: 10 }} />
 
-<div className="row" style={{ gap: 10 }}>
-  <div>
-    <div className="small">Risk</div>
-    <RiskBadge level={data?.risk.level ?? "LOW"} />
-  </div>
+            <div className="row" style={{ gap: 10 }}>
+              <div>
+                <div className="small">Risk</div>
+                <RiskBadge level={data?.risk.level ?? "LOW"} />
+              </div>
 
-  <div>
-    <div className="small">Confidence</div>
-    <RiskBadge level={data?.risk.confidence ?? "LOW"} />
-  </div>
-</div>
+              <div>
+                <div className="small">Confidence</div>
+                <ConfidenceBadge level={(data as any)?.risk?.confidence ?? "LOW"} />
+              </div>
+            </div>
 
             <div className="small" style={{ opacity: 0.6, marginTop: 8 }}>
               Info only — does not affect score
@@ -592,7 +640,6 @@ export default function Home() {
           </div>
         </div>
 
-        {/* ERROR */}
         {error && (
           <>
             <div style={{ height: 14 }} />
@@ -600,7 +647,6 @@ export default function Home() {
           </>
         )}
 
-        {/* WHY */}
         {data && (
           <>
             <div style={{ height: 14 }} />
@@ -613,6 +659,11 @@ export default function Home() {
                 <div className="card" style={{ padding: 12, marginBottom: 12 }}>
                   <div style={{ fontWeight: 700 }}>LP status unknown</div>
                   <div className="small">Info only — does not affect score</div>
+                  {/* proof for LP unknown (if exists) */}
+                  {(() => {
+                    const sig = data.signals.find(s => s.id === "LP_STATUS_UNKNOWN");
+                    return sig ? <ProofLinksRow signal={sig} /> : null;
+                  })()}
                 </div>
               )}
 
@@ -630,27 +681,40 @@ export default function Home() {
                       let triggered = false;
                       let label = r.label;
                       let pts = r.points;
+                      let matchedSignal: any = null;
 
                       if (r.id === "TOP10_DYNAMIC") {
                         const v = resolveTop10();
                         triggered = Boolean(v);
                         label = v ? `Top-10 holders > ${v.txt}` : "Top-10 holders > 40%";
                         pts = v ? v.pts : 5;
+                        matchedSignal = v?.id ? data.signals.find(s => s.id === v.id) : null;
                       } else if (r.id === "DEV_HOLDS_DYNAMIC") {
                         const v = resolveDevHolds();
                         triggered = Boolean(v);
                         label = v ? `Dev wallet holds > ${v.txt}` : "Dev wallet holds > 30%";
                         pts = v ? v.pts : 10;
+                        matchedSignal = v?.id ? data.signals.find(s => s.id === v.id) : null;
                       } else {
-                        triggered = Boolean(data.signals.find(s => s.id === r.id));
+                        matchedSignal = data.signals.find(s => s.id === r.id);
+                        triggered = Boolean(matchedSignal);
                       }
 
                       return (
-                        <div key={r.id} className="row" style={{ justifyContent: "space-between" }}>
-                          <span className="small">{label}</span>
-                          <span style={{ fontWeight: 800 }}>
-                            {triggered ? `+${pts}` : "—"}
-                          </span>
+                        <div key={r.id} style={{ marginBottom: 8 }}>
+                          <div className="row" style={{ justifyContent: "space-between" }}>
+                            <span className="small">{label}</span>
+                            <span style={{ fontWeight: 800 }}>
+                              {triggered ? `+${pts}` : "—"}
+                            </span>
+                          </div>
+
+                          {/* Proof links for triggered rows */}
+                          {triggered && matchedSignal ? (
+                            <div style={{ marginTop: 6 }}>
+                              <ProofLinksRow signal={matchedSignal} />
+                            </div>
+                          ) : null}
                         </div>
                       );
                     })}
@@ -659,35 +723,34 @@ export default function Home() {
               </div>
             </div>
 
-            {/* BOTTOM ROW: VERDICT / COMMUNITY / BREAKDOWN */}
             <div style={{ height: 14 }} />
             <div className="grid3">
-              {/* VERDICT */}
               <div className="card">
                 {(() => {
                   const vLevel = verdictFromScore(data.risk.score);
                   const v = VERDICT_COPY[vLevel];
 
                   const topSignals = pickSmartSignals({
-                  signals: data.signals ?? [],
-                  level: vLevel,
-                  limit: 2,
+                    signals: data.signals ?? [],
+                    level: vLevel,
+                    limit: 2,
                   });
+
                   const url = typeof window !== "undefined"
                     ? window.location.href
                     : "https://pump-guard-azure.vercel.app/";
 
                   const tweet = toTweetText({
-  chain: data.chain,
-  score: data.risk.score,
-  level: vLevel,
-  confidence: data.risk.confidence,
-  topSignals,
-  url,
-  tokenName: data.token?.name,
-  tokenSymbol: data.token?.symbol,
-  tokenAddress: data.token?.address,
-});
+                    chain: data.chain,
+                    score: data.risk.score,
+                    level: vLevel,
+                    confidence: (data as any).risk.confidence,
+                    topSignals,
+                    url,
+                    tokenName: data.token?.name,
+                    tokenSymbol: data.token?.symbol,
+                    tokenAddress: data.token?.address,
+                  });
 
                   return (
                     <>
@@ -720,7 +783,6 @@ export default function Home() {
                 })()}
               </div>
 
-              {/* COMMUNITY */}
               <div className="card">
                 <div className="row" style={{ justifyContent: "space-between" }}>
                   <b>COMMUNITY FLAGS</b>
@@ -796,7 +858,6 @@ export default function Home() {
                 </div>
               </div>
 
-              {/* BREAKDOWN */}
               <div className="card">
                 <div className="row" style={{ justifyContent: "space-between" }}>
                   <b>RISK BREAKDOWN</b>

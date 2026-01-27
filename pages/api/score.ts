@@ -142,6 +142,46 @@ function computeScoreWithCaps(signals: Signal[]) {
 }
 
 /* =========================================================
+   Proof links + safe wrappers (do not break existing proof: string[])
+   ========================================================= */
+
+function withTimeout<T>(p: Promise<T>, ms = 5000) {
+  return new Promise<T>((resolve, reject) => {
+    const t = setTimeout(() => reject(new Error("timeout")), ms);
+    p.then((v) => {
+      clearTimeout(t);
+      resolve(v);
+    }).catch((e) => {
+      clearTimeout(t);
+      reject(e);
+    });
+  });
+}
+
+function toProofLinks(urls: string[] | undefined) {
+  const arr = Array.isArray(urls) ? urls : [];
+  return arr.map((url) => {
+    let label = "Proof";
+    if (url.includes("solscan.io")) label = "Solscan";
+    else if (url.includes("solana.fm")) label = "SolanaFM";
+    else if (url.includes("birdeye.so")) label = "Birdeye";
+    return { label, url };
+  });
+}
+
+/** Adds proofLinks without breaking current UI that expects proof: string[] */
+function decorateSignals(signals: Signal[]) {
+  return signals.map((s: any) => {
+    const proof = Array.isArray(s.proof) ? s.proof : [];
+    return {
+      ...s,
+      proof,
+      proofLinks: toProofLinks(proof),
+    };
+  });
+}
+
+/* =========================================================
    Types
    ========================================================= */
 
@@ -239,6 +279,7 @@ async function getTokenNameSymbolHelius(
     return {};
   }
 }
+
 /* =========================================================
    Holders count (real) via Helius DAS getTokenAccounts
    ========================================================= */
@@ -266,7 +307,7 @@ async function getHoldersCountHelius(mint: string): Promise<number | undefined> 
       params: {
         mint,
         limit: LIMIT,
-        cursor, // ← ВАЖНО: тут только переменная cursor, НЕ page/r
+        cursor,
       },
     });
 
@@ -428,7 +469,7 @@ async function solTokenSignals(
     } as any);
   }
 
-  /* ---------- Supply & holders (DISTRIBUTION max 30) ---------- */
+  /* ---------- Supply & top10 (DISTRIBUTION max 30) ---------- */
 
   const supply = await conn.getTokenSupply(mintPk);
   const supplyUi = supply.value.uiAmount ?? null;
@@ -444,7 +485,9 @@ async function solTokenSignals(
     supplyUi && supplyUi > 0 ? (topSum / supplyUi) * 100 : undefined;
 
   meta.top10_percent = top10Percent;
-  meta.holders = largest.value.length;
+
+  // IMPORTANT: do NOT treat largest accounts count as holders count
+  meta.holders = undefined;
 
   if (typeof top10Percent === "number") {
     if (top10Percent > 80) {
@@ -543,17 +586,21 @@ async function solTokenSignals(
       proof: [explorerToken("sol", mint)],
     } as any);
   }
- /* ---------- Dev holds (DISTRIBUTION, dynamic) ---------- */
+
+  /* ---------- Dev holds (DISTRIBUTION, dynamic) ---------- */
   // UI ждёт: DEV_HOLDS_GT_30 / DEV_HOLDS_GT_50
 
   const devAddr = meta.dev_candidate;
-  const supplyUiNum = typeof meta.supply_ui === "number" ? meta.supply_ui : undefined;
+  const supplyUiNum =
+    typeof meta.supply_ui === "number" ? meta.supply_ui : undefined;
 
   if (devAddr && supplyUiNum && supplyUiNum > 0) {
     try {
       const devPk = new PublicKey(devAddr);
 
-      const devAccounts = await conn.getParsedTokenAccountsByOwner(devPk, { mint: mintPk });
+      const devAccounts = await conn.getParsedTokenAccountsByOwner(devPk, {
+        mint: mintPk,
+      });
 
       let devAmountUi = 0;
       for (const acc of devAccounts.value as any[]) {
@@ -584,6 +631,7 @@ async function solTokenSignals(
       // ignore
     }
   }
+
   return { signals, meta };
 }
 
@@ -627,21 +675,25 @@ export default async function handler(
       confidence = "MED";
 
       const r = await solTokenSignals(conn, input);
-signals = r.signals;
+      signals = r.signals;
 
-// ✅ token meta не должно ломать scoring
-let tmeta: { name?: string; symbol?: string } = {};
-try {
-  tmeta = await getTokenNameSymbolHelius(input);
-} catch {}
+      // Fetch meta + holders safely (never fail scoring/UI due to these)
+      const [tmetaRes, holdersRes] = await Promise.allSettled([
+        withTimeout(getTokenNameSymbolHelius(input), 4500),
+        withTimeout(getHoldersCountHelius(input), 6500),
+      ]);
 
-// ✅ holders не должно ломать scoring
-let holdersCount: number | undefined = undefined;
-try {
-  holdersCount = await getHoldersCountHelius(input);
-} catch {}
+      const tmeta =
+        tmetaRes.status === "fulfilled" && tmetaRes.value ? tmetaRes.value : {};
 
-     score = computeScoreWithCaps(signals);
+      const holdersCount =
+        holdersRes.status === "fulfilled" &&
+        typeof holdersRes.value === "number"
+          ? holdersRes.value
+          : undefined;
+
+      // score does not depend on holders/meta
+      score = computeScoreWithCaps(signals);
 
       // Confidence v1 (честная)
       confidence = "MED";
@@ -660,15 +712,19 @@ try {
         confidence = "HIGH";
       }
 
+      // IMPORTANT: always send holders as number|null (not undefined)
+      const holdersFinal: number | undefined =
+      typeof holdersCount === "number" ? holdersCount : undefined;
+
       const response: ScoreResponse = {
         chain,
         input_type: "token",
         token: {
           address: input,
-          name: tmeta?.name,
-          symbol: tmeta?.symbol,
+          name: (tmeta as any)?.name,
+          symbol: (tmeta as any)?.symbol,
           age_seconds: r.meta.age_seconds,
-          holders: holdersCount, // ✅ реальное число (не "20")
+          holders: holdersFinal,
           top10_percent: r.meta.top10_percent,
           links: { explorer: explorerToken("sol", input) },
         },
@@ -684,7 +740,7 @@ try {
           confidence,
           mode,
         },
-        signals,
+        signals: decorateSignals(signals) as any,
         community: { rugged: 0, sus: 0, trusted: 0, recent: [] },
       };
 
@@ -697,25 +753,33 @@ try {
       label: "Live scoring failed, falling back to demo",
       value: String(e?.message || e),
       weight: 0,
+      proof: [],
     } as any);
   }
 
+  // DEMO fallback
   signals.push({
     id: "DEMO_MODE",
     label: "Demo mode (missing RPC or API keys)",
     weight: 0,
+    proof: [],
   } as any);
 
   const response: ScoreResponse = {
     chain: chain as Chain,
     input_type: "token",
+    token: {
+      address: input,
+      holders: undefined,
+      links: chain === "sol" ? { explorer: explorerToken("sol", input) } : undefined,
+    } as any,
     risk: {
       score: clamp(score, 0, 100),
       level: levelFromScore(score),
       confidence,
       mode,
     },
-    signals,
+    signals: decorateSignals(signals) as any,
     community: { rugged: 0, sus: 0, trusted: 0, recent: [] },
   };
 
