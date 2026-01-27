@@ -505,21 +505,22 @@ async function loadHoldersSol(mint: string) {
       if ((loadHoldersSol as any)._runId !== runId) return;
 
       const r = await fetch(`/api/holders?mint=${m}&action=step`);
-      const j = await r.json().catch(() => null);
+const j = await r.json().catch(() => null);
 
-      if (!j) {
-        await new Promise(res => setTimeout(res, DELAY_MS));
-        continue;
-      }
+if (!j) {
+  await new Promise(res => setTimeout(res, DELAY_MS));
+  continue;
+}
 
-      if (j.status === "running") {
-        // ⚠️ если у тебя поля называются иначе — поменяй тут
-        const soFar = Number(j.holders_so_far);
-        const pages = Number(j.pages);
+if (j.status === "running") {
+  // backend отдаёт { holders_so_far: number, pages: number }
+  // но на всякий случай поддержим строку тоже
+  const soFar = typeof j.holders_so_far === "number" ? j.holders_so_far : Number(j.holders_so_far);
+  const pages = typeof j.pages === "number" ? j.pages : Number(j.pages);
 
-        if (Number.isFinite(soFar)) setHoldersSoFar(soFar);
-        if (Number.isFinite(pages)) setHoldersPages(pages);
-      }
+  if (!Number.isNaN(soFar)) setHoldersSoFar(soFar);
+  if (!Number.isNaN(pages)) setHoldersPages(pages);
+}
 
       if (j.status === "done") {
         const holders = Number(j.holders);
@@ -716,7 +717,11 @@ if ((j?.chain || chain) === "sol" && type === "token" && j?.token?.address) {
             <div style={{ height: 8 }} />
 
             <div className="small">Holders</div>
-            <div>{holdersLoading ? "Loading…" : formatHolders(data?.token?.holders)}</div>
+<div>
+  {holdersLoading
+    ? (holdersSoFar !== null ? `Loading… (${holdersSoFar}+)` : "Loading…")
+    : formatHolders(data?.token?.holders)}
+</div>
 
 
             <div style={{ height: 10 }} />
