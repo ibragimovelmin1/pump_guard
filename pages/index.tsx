@@ -560,16 +560,31 @@ export default function Home() {
               </>
             )}
             <div className="small">Dev wallet</div>
-            <div style={{ wordBreak: "break-all" }}>{data?.dev?.address ?? "—"}</div>
+<div style={{ wordBreak: "break-all" }}>{data?.dev?.address ?? "—"}</div>
 
-            <div style={{ height: 8 }} />
+<div style={{ height: 8 }} />
 
-            <div className="small">Token age</div>
-            <div>{formatAge(data?.token?.age_seconds)}</div>
+<div className="small">Token age</div>
+<div>{formatAge(data?.token?.age_seconds)}</div>
 
-            <div style={{ marginTop: 10 }}>
-              <RiskBadge level={data?.risk.level ?? "LOW"} />
-            </div>
+<div style={{ height: 8 }} />
+
+<div className="small">Holders</div>
+<div>{data?.token?.holders ?? "—"}</div>
+
+<div style={{ height: 10 }} />
+
+<div className="row" style={{ gap: 10 }}>
+  <div>
+    <div className="small">Risk</div>
+    <RiskBadge level={data?.risk.level ?? "LOW"} />
+  </div>
+
+  <div>
+    <div className="small">Confidence</div>
+    <RiskBadge level={data?.risk.confidence ?? "LOW"} />
+  </div>
+</div>
 
             <div className="small" style={{ opacity: 0.6, marginTop: 8 }}>
               Info only — does not affect score
