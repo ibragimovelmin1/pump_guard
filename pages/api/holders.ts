@@ -28,7 +28,7 @@ async function heliusRpc<T>(body: any): Promise<T> {
   const apiKey = process.env.HELIUS_API_KEY;
   if (!apiKey) throw new Error("Missing HELIUS_API_KEY");
 
-  const url = `https://api-mainnet.helius-rpc.com/?api-key=${apiKey}`;
+ const url = `https://mainnet.helius-rpc.com/?api-key=${apiKey}`;
   const resp = await fetch(url, {
     method: "POST",
     headers: { "content-type": "application/json" },
