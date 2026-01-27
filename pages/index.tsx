@@ -485,24 +485,21 @@ export default function Home() {
 
   /* ---------- Main request ---------- */
   async function run() {
-  async function loadHoldersSol(mint: string) {
+async function loadHoldersSol(mint: string) {
   const runId = Date.now();
   (loadHoldersSol as any)._runId = runId;
 
   try {
     setHoldersLoading(true);
-
-    // reset progress
-    if (typeof setHoldersSoFar === "function") setHoldersSoFar(null);
-    if (typeof setHoldersPages === "function") setHoldersPages(null);
+    setHoldersSoFar(null);
+    setHoldersPages(null);
 
     const m = encodeURIComponent(mint);
 
-    // start job
     await fetch(`/api/holders?mint=${m}&action=start`).catch(() => {});
 
-    const MAX_STEPS = 120;
-    const DELAY_MS = 350;
+    const MAX_STEPS = 200;   // больше, чтобы не обрубало
+    const DELAY_MS = 250;    // быстрее, чем 350
 
     for (let i = 0; i < MAX_STEPS; i++) {
       if ((loadHoldersSol as any)._runId !== runId) return;
@@ -515,10 +512,13 @@ export default function Home() {
         continue;
       }
 
-      // progress
       if (j.status === "running") {
-        if (typeof j.holders_so_far === "number") setHoldersSoFar(j.holders_so_far);
-        if (typeof j.pages === "number") setHoldersPages(j.pages);
+        // ⚠️ если у тебя поля называются иначе — поменяй тут
+        const soFar = Number(j.holders_so_far);
+        const pages = Number(j.pages);
+
+        if (Number.isFinite(soFar)) setHoldersSoFar(soFar);
+        if (Number.isFinite(pages)) setHoldersPages(pages);
       }
 
       if (j.status === "done") {
