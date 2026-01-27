@@ -627,11 +627,19 @@ export default async function handler(
       confidence = "MED";
 
       const r = await solTokenSignals(conn, input);
-      signals = r.signals;
+signals = r.signals;
 
-      // ✅ fetch name/symbol via Helius DAS (getAsset)
-      const tmeta = await getTokenNameSymbolHelius(input);
-      const holdersCount = await getHoldersCountHelius(input);
+// ✅ token meta не должно ломать scoring
+let tmeta: { name?: string; symbol?: string } = {};
+try {
+  tmeta = await getTokenNameSymbolHelius(input);
+} catch {}
+
+// ✅ holders не должно ломать scoring
+let holdersCount: number | undefined = undefined;
+try {
+  holdersCount = await getHoldersCountHelius(input);
+} catch {}
 
      score = computeScoreWithCaps(signals);
 
