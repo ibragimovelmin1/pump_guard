@@ -239,6 +239,49 @@ async function getTokenNameSymbolHelius(
     return {};
   }
 }
+/* =========================================================
+   Holders count (real) via Helius DAS getTokenAccounts
+   ========================================================= */
+
+async function getHoldersCountHelius(mint: string): Promise<number | undefined> {
+  if (!process.env.HELIUS_API_KEY) return undefined;
+
+  type Resp = {
+    token_accounts?: Array<{ owner?: string; amount?: number }>;
+    cursor?: string;
+  };
+
+  const owners = new Set<string>();
+  let cursor: string | undefined = undefined;
+
+  const LIMIT = 1000;
+  const MAX_PAGES = 25;
+  const MAX_OWNERS = 50_000;
+
+  for (let i = 0; i < MAX_PAGES; i++) {
+    const page: Resp = await heliusRpc<Resp>({
+      jsonrpc: "2.0",
+      id: `get-token-accounts-${i}`,
+      method: "getTokenAccounts",
+      params: {
+        mint,
+        limit: LIMIT,
+        cursor, // ← ВАЖНО: тут только переменная cursor, НЕ page/r
+      },
+    });
+
+    const arr = page?.token_accounts ?? [];
+    for (const ta of arr) {
+      if (ta?.owner && (ta.amount ?? 0) > 0) owners.add(ta.owner);
+      if (owners.size >= MAX_OWNERS) return owners.size;
+    }
+
+    if (!page?.cursor || arr.length === 0) break;
+    cursor = page.cursor;
+  }
+
+  return owners.size || undefined;
+}
 
 /* =========================================================
    Age: Helius (fast + deeper history) with fallback
@@ -588,12 +631,21 @@ export default async function handler(
 
       // ✅ fetch name/symbol via Helius DAS (getAsset)
       const tmeta = await getTokenNameSymbolHelius(input);
+      const holdersCount = await getHoldersCountHelius(input);
 
-      score = computeScoreWithCaps(signals);
+     score = computeScoreWithCaps(signals);
 
-      if (
+      // Confidence v1 (честная)
+      confidence = "MED";
+
+      if (mode !== "LIVE") {
+        confidence = "LOW";
+      } else if (!r.meta.age_seconds || r.meta.age_seconds < 86400) {
+        // токену меньше 1 дня → доверие низкое
+        confidence = "LOW";
+      } else if (
         r.meta.age_seconds &&
-        r.meta.top10_percent &&
+        typeof r.meta.top10_percent === "number" &&
         r.meta.dev_candidate &&
         process.env.HELIUS_API_KEY
       ) {
@@ -605,10 +657,10 @@ export default async function handler(
         input_type: "token",
         token: {
           address: input,
-         name: tmeta?.name,
-         symbol: tmeta?.symbol, 
+          name: tmeta?.name,
+          symbol: tmeta?.symbol,
           age_seconds: r.meta.age_seconds,
-          holders: r.meta.holders,
+          holders: holdersCount, // ✅ реальное число (не "20")
           top10_percent: r.meta.top10_percent,
           links: { explorer: explorerToken("sol", input) },
         },
