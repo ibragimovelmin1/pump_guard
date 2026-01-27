@@ -493,7 +493,7 @@ async function solTokenSignals(
     if (top10Percent > 80) {
       addSignal({
         id: "TOP10_GT_80",
-        label: "Top holders concentration is extreme",
+        label: "Top token accounts concentration is extreme",
         value: `top10=${top10Percent.toFixed(1)}%`,
         weight: 15,
         proof: [explorerToken("sol", mint)],
@@ -501,7 +501,7 @@ async function solTokenSignals(
     } else if (top10Percent > 60) {
       addSignal({
         id: "TOP10_GT_60",
-        label: "Top holders concentration is high",
+        label: "Top token accounts concentration is extreme",
         value: `top10=${top10Percent.toFixed(1)}%`,
         weight: 10,
         proof: [explorerToken("sol", mint)],
@@ -509,7 +509,7 @@ async function solTokenSignals(
     } else if (top10Percent > 40) {
       addSignal({
         id: "TOP10_GT_40",
-        label: "Top holders concentration is elevated",
+        label: "Top token accounts concentration is extreme",
         value: `top10=${top10Percent.toFixed(1)}%`,
         weight: 5,
         proof: [explorerToken("sol", mint)],

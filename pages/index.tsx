@@ -367,7 +367,7 @@ const WHY_GROUPS: { title: string; cap: number; rows: WhyRow[] }[] = [
     title: "DISTRIBUTION",
     cap: 30,
     rows: [
-      { id: "TOP10_DYNAMIC", label: "Top-10 holders >", points: 0 },
+      { id: "TOP10_DYNAMIC", label: "Top-10 token accounts >", points: 0 },
       { id: "DEV_HOLDS_DYNAMIC", label: "Dev wallet holds >", points: 0 },
     ],
   },
@@ -407,7 +407,7 @@ export default function Home() {
 
   const [loading, setLoading] = useState(false);
   const [deepLoading, setDeepLoading] = useState(false);
-
+  const [holdersLoading, setHoldersLoading] = useState(false);
   const [data, setData] = useState<ScoreResponse | null>(null);
   const [deepSignals, setDeepSignals] = useState<Signal[]>([]);
   const [error, setError] = useState("");
@@ -483,6 +483,38 @@ export default function Home() {
 
   /* ---------- Main request ---------- */
   async function run() {
+    async function loadHoldersSol(mint: string) {
+  try {
+    setHoldersLoading(true);
+
+    // start job
+    await fetch(`/api/holders?mint=${encodeURIComponent(mint)}&action=start`).catch(() => {});
+
+    // poll until done
+    const MAX_STEPS = 60;
+    for (let i = 0; i < MAX_STEPS; i++) {
+      const r = await fetch(`/api/holders?mint=${encodeURIComponent(mint)}&action=step`);
+      const j = await r.json();
+
+      if (j?.status === "done" && typeof j.holders === "number") {
+        setData(prev => {
+          if (!prev?.token) return prev;
+          return {
+            ...prev,
+            token: { ...prev.token, holders: j.holders },
+          };
+        });
+        return;
+      }
+
+      if (j?.status === "error") return;
+
+      await new Promise(res => setTimeout(res, 250));
+    }
+  } finally {
+    setHoldersLoading(false);
+  }
+}
     setLoading(true);
     setDeepLoading(false);
     setError("");
@@ -496,6 +528,10 @@ export default function Home() {
       const j = await res.json();
       if (!res.ok) throw new Error(j?.error || "Request failed");
       setData(j);
+      // holders incremental (SOL token)
+if ((j?.chain || chain) === "sol" && type === "token" && j?.token?.address) {
+  loadHoldersSol(j.token.address);
+}
 
       // start deep in background (only for SOL tokens)
       const effectiveChain = (j?.chain || chain) as string;
@@ -653,7 +689,8 @@ export default function Home() {
             <div style={{ height: 8 }} />
 
             <div className="small">Holders</div>
-            <div>{formatHolders(data?.token?.holders)}</div>
+            <div>{holdersLoading ? "Loading…" : formatHolders(data?.token?.holders)}</div>
+
 
             <div style={{ height: 10 }} />
 
@@ -736,7 +773,7 @@ export default function Home() {
                       if (r.id === "TOP10_DYNAMIC") {
                         const v = resolveTop10();
                         triggered = Boolean(v);
-                        label = v ? `Top-10 holders > ${v.txt}` : "Top-10 holders > 40%";
+                        label = v ? `Top-10 token accounts > ${v.txt}` : "Top-10 token accounts > 40%";
                         pts = v ? v.pts : 5;
                         matchedSignal = v?.id ? findSig(v.id) : null;
                         isDeepRow = false;
