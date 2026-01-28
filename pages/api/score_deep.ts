@@ -149,8 +149,6 @@ async function discoverRaydiumPoolId(
         mint1: tokenMint,
         mint2: q.mint,
         poolType: "all",
-        poolSortField: "liquidity",
-        sortType: "desc",
         page: "1",
         pageSize: "10",
       }).toString();
@@ -160,6 +158,7 @@ async function discoverRaydiumPoolId(
       const pools = extractArray(j);
       if (!pools.length) continue;
 
+      // без сортировки на сервере: берём первый найденный пул
       const poolId = pickPoolId(pools[0]);
       if (poolId) return { poolId, quote: q.quote };
     } catch {
