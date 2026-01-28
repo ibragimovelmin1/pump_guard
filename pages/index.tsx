@@ -768,15 +768,6 @@ if ((j?.chain || chain) === "sol" && type === "token" && j?.token?.address) {
               <div className="small">These checks may affect the score</div>
               <hr />
 
-              {/* Info-only LP unknown card (as before) */}
-              {mergedSignals?.some(s => s.id === "LP_STATUS_UNKNOWN") && (
-                <div className="card" style={{ padding: 12, marginBottom: 12 }}>
-                  <div style={{ fontWeight: 700 }}>LP status unknown</div>
-                  <div className="small">Info only — does not affect score</div>
-                  <ProofLinksInline signal={findSig("LP_STATUS_UNKNOWN")} />
-                </div>
-              )}
-
               {/* Deep loading banner (only if deep and no deep signals yet) */}
               {deepLoading && !hasAnyDeepSignal && (
                 <div className="card" style={{ padding: 12, marginBottom: 12, opacity: 0.9 }}>
@@ -829,14 +820,25 @@ if ((j?.chain || chain) === "sol" && type === "token" && j?.token?.address) {
                           <div className="row" style={{ justifyContent: "space-between" }}>
                             <span className="small">{label}</span>
                             <span style={{ fontWeight: 800 }}>
-                              {triggered ? `+${pts}` : showLoading ? "Loading…" : "—"}
-                            </span>
+  {triggered
+    ? `+${pts}`
+    : showLoading
+      ? "Loading…"
+      : (r.id === "LP_NOT_BURNED" && mergedSignals?.some(s => s.id === "LP_STATUS_UNKNOWN"))
+        ? "Unknown"
+        : "—"}
+</span>
                           </div>
 
                           {/* Proof links only when triggered */}
                           {triggered && matchedSignal ? (
                             <ProofLinksInline signal={matchedSignal} />
                           ) : null}
+                          {(!triggered &&
+  r.id === "LP_NOT_BURNED" &&
+  mergedSignals?.some(s => s.id === "LP_STATUS_UNKNOWN")) ? (
+  <ProofLinksInline signal={findSig("LP_STATUS_UNKNOWN")} />
+) : null}
                         </div>
                       );
                     })}
