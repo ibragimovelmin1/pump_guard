@@ -328,6 +328,11 @@ async function deepAnalyzeSol(mint: string) {
   const rpc = process.env.SOLANA_RPC_URL || "https://api.mainnet-beta.solana.com";
   const conn = new Connection(rpc, "confirmed");
   const mintPk = new PublicKey(mint);
+  // TEMP debug: pumpswap pair program owner
+const pair = new PublicKey("DhYKr8nSCseramSNiUFy8dNwp9Srn5ZsHB59Jaw9GFtL");
+const acc = await conn.getAccountInfo(pair);
+console.log("[PAIR owner]", acc?.owner?.toBase58());
+console.log("[PAIR data len]", acc?.data?.length);
 
   const signals: any[] = [];
 
