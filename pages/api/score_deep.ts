@@ -10,8 +10,7 @@ import { explorerAddress, explorerToken } from "../../lib/explorer";
 
 type CacheEntry = { ts: number; value: any };
 
-const __PG_CACHE: Map<string, CacheEntry> =
-  (globalThis as any).__PG_CACHE || new Map();
+const __PG_CACHE: Map<string, CacheEntry> = (globalThis as any).__PG_CACHE || new Map();
 (globalThis as any).__PG_CACHE = __PG_CACHE;
 
 function cacheGet(key: string, ttlMs: number) {
@@ -75,6 +74,152 @@ function addSignal(signals: any[], s: Signal) {
 }
 
 /* =========================================================
+   Raydium LP check (v1): discovery via Raydium API, verify on-chain
+   ========================================================= */
+
+const RAYDIUM_API = "https://api-v3.raydium.io";
+
+// Common quote mints (mainnet)
+const WSOL_MINT = "So11111111111111111111111111111111111111112";
+const USDC_MINT = "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v";
+
+// Solana burn address (incinerator)
+const INCINERATOR = "1nc1nerator11111111111111111111111111111111";
+
+async function fetchJson(url: string, ms = 6000) {
+  const ctrl = new AbortController();
+  const t = setTimeout(() => ctrl.abort(), ms);
+  try {
+    const r = await fetch(url, { signal: ctrl.signal });
+    const j = await r.json().catch(() => null);
+    if (!r.ok) throw new Error(`HTTP ${r.status}: ${JSON.stringify(j)}`);
+    return j;
+  } finally {
+    clearTimeout(t);
+  }
+}
+
+// Raydium API wrappers can vary; this extracts an array from common shapes
+function extractArray(j: any): any[] {
+  if (!j) return [];
+  if (Array.isArray(j)) return j;
+  if (Array.isArray(j.data)) return j.data;
+  if (Array.isArray(j?.data?.data)) return j.data.data;
+  if (Array.isArray(j?.data?.list)) return j.data.list;
+  if (Array.isArray(j?.data?.pools)) return j.data.pools;
+  if (Array.isArray(j?.pools)) return j.pools;
+  return [];
+}
+
+function pickPoolId(pool: any): string | null {
+  return (
+    pool?.id ||
+    pool?.poolId ||
+    pool?.ammId ||
+    pool?.amm_id ||
+    pool?.pool_id ||
+    pool?.poolIdStr ||
+    pool?.pool_id_str ||
+    null
+  );
+}
+
+function pickLpMint(keys: any): string | null {
+  return (
+    keys?.lpMint ||
+    keys?.lp_mint ||
+    keys?.lpMintAddress ||
+    keys?.lp_mint_address ||
+    null
+  );
+}
+
+async function discoverRaydiumPoolId(
+  tokenMint: string
+): Promise<{ poolId: string; quote: "WSOL" | "USDC" } | null> {
+  const tries: Array<{ quote: "WSOL" | "USDC"; mint: string }> = [
+    { quote: "WSOL", mint: WSOL_MINT },
+    { quote: "USDC", mint: USDC_MINT },
+  ];
+
+  for (const q of tries) {
+    const url =
+      `${RAYDIUM_API}/pools/info/mint?` +
+      new URLSearchParams({
+        mint1: tokenMint,
+        mint2: q.mint,
+        poolType: "all",
+        poolSortField: "liquidity",
+        sortType: "desc",
+        page: "1",
+        pageSize: "10",
+      }).toString();
+
+    try {
+      const j = await fetchJson(url, 7000);
+      const pools = extractArray(j);
+      if (!pools.length) continue;
+
+      const poolId = pickPoolId(pools[0]);
+      if (poolId) return { poolId, quote: q.quote };
+    } catch {
+      // ignore; try next quote
+    }
+  }
+
+  return null;
+}
+
+async function fetchRaydiumPoolKeys(poolId: string): Promise<any | null> {
+  const url = `${RAYDIUM_API}/pools/key/ids?ids=${encodeURIComponent(poolId)}`;
+  try {
+    const j = await fetchJson(url, 7000);
+    const arr = extractArray(j);
+    if (arr.length) return arr[0];
+    if (j?.data && !Array.isArray(j.data)) return j.data;
+    return j;
+  } catch {
+    return null;
+  }
+}
+
+async function calcLpBurnedPct(
+  conn: Connection,
+  lpMint: string
+): Promise<{ burnedPct: number; burnedRaw: bigint; supplyRaw: bigint } | null> {
+  const lpMintPk = new PublicKey(lpMint);
+
+  const supplyInfo = await conn.getTokenSupply(lpMintPk);
+  const supplyRaw = BigInt(supplyInfo?.value?.amount || "0");
+  if (supplyRaw <= 0n) return null;
+
+  const largest = await conn.getTokenLargestAccounts(lpMintPk);
+  const accounts = largest?.value || [];
+  if (!accounts.length) return null;
+
+  let burnedRaw = 0n;
+
+  const MAX_CHECK = Math.min(accounts.length, 25);
+  for (let i = 0; i < MAX_CHECK; i++) {
+    const accAddr = accounts[i]?.address;
+    const amountStr = accounts[i]?.amount; // raw string
+
+    if (!accAddr || !amountStr) continue;
+
+    // parsed token account => info.owner is the owner wallet address
+    const info = await conn.getParsedAccountInfo(accAddr);
+    const owner = (info?.value as any)?.data?.parsed?.info?.owner;
+
+    if (owner === INCINERATOR) {
+      burnedRaw += BigInt(amountStr);
+    }
+  }
+
+  const burnedPct = Number(burnedRaw) / Number(supplyRaw);
+  return { burnedPct, burnedRaw, supplyRaw };
+}
+
+/* =========================================================
    Helius Enhanced Transactions
    ========================================================= */
 
@@ -95,10 +240,7 @@ type HeliusEnhancedTx = {
   }>;
 };
 
-async function heliusEnhancedTxByAddressAsc(
-  address: string,
-  limit: number
-): Promise<HeliusEnhancedTx[]> {
+async function heliusEnhancedTxByAddressAsc(address: string, limit: number): Promise<HeliusEnhancedTx[]> {
   const apiKey = process.env.HELIUS_API_KEY;
   if (!apiKey) throw new Error("Missing HELIUS_API_KEY");
 
@@ -209,6 +351,39 @@ async function deepAnalyzeSol(mint: string) {
     // ignore
   }
 
+  // ===== LIQUIDITY: Raydium LP burn check (v1) =====
+  // - pool discovery via Raydium official API
+  // - verify LP burn strictly on-chain by checking LP mint top holders for incinerator
+  try {
+    const found = await discoverRaydiumPoolId(mint);
+    if (found?.poolId) {
+      const keys = await fetchRaydiumPoolKeys(found.poolId);
+      const lpMint = pickLpMint(keys);
+
+      // Only classic pools have lpMint (AMM/CPMM). CLMM-like may not.
+      if (lpMint) {
+        const burned = await calcLpBurnedPct(conn, lpMint);
+
+        // Rule v1: if <95% LP is burned -> LP_NOT_BURNED
+        if (burned && burned.burnedPct < 0.95) {
+          addSignal(signals, {
+            id: "LP_NOT_BURNED",
+            label: "LP not burned (liquidity can likely be removed)",
+            value: `burned=${(burned.burnedPct * 100).toFixed(2)}%`,
+            weight: 10,
+            proof: [
+              explorerAddress("sol", found.poolId),
+              explorerToken("sol", lpMint),
+              explorerAddress("sol", INCINERATOR),
+            ],
+          });
+        }
+      }
+    }
+  } catch {
+    // never break deep endpoint
+  }
+
   // Dev candidate for dev-dump heuristics
   const devCand = await detectDevCandidate(conn, mintPk);
   const dev = devCand.dev;
@@ -302,7 +477,11 @@ async function deepAnalyzeSol(mint: string) {
       // If "to" is among early buyers wide, treat it as funding
       if (!uniqBuyersEarlyWide.includes(to)) continue;
 
-      const cur = funderToCount.get(from) || { count: 0, buyers: new Set<string>(), proofSig: undefined };
+      const cur = funderToCount.get(from) || {
+        count: 0,
+        buyers: new Set<string>(),
+        proofSig: undefined,
+      };
       cur.buyers.add(to);
       cur.count = cur.buyers.size;
       if (!cur.proofSig && tx.signature) cur.proofSig = tx.signature;
@@ -375,14 +554,16 @@ async function deepAnalyzeSol(mint: string) {
       const pct = supplyUi && supplyUi > 0 ? (totalDevOut / supplyUi) * 100 : null;
 
       // If we can compute %, use it; otherwise require higher absolute amount
-      const shouldFlag =
-        pct !== null ? pct >= 1.0 : totalDevOut >= 100_000;
+      const shouldFlag = pct !== null ? pct >= 1.0 : totalDevOut >= 100_000;
 
       if (shouldFlag) {
         addSignal(signals, {
           id: "DEV_DUMP_EARLY",
           label: "Dev wallet moved a significant amount soon after launch (possible early dump)",
-          value: pct !== null ? `dev_out=${pct.toFixed(2)}% (first 60m)` : `dev_out=${Math.round(totalDevOut)} (first 60m)`,
+          value:
+            pct !== null
+              ? `dev_out=${pct.toFixed(2)}% (first 60m)`
+              : `dev_out=${Math.round(totalDevOut)} (first 60m)`,
           weight: 10,
           proof: [
             explorerAddress("sol", dev),
@@ -420,14 +601,12 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
 
   // Validate mint
   try {
-    // will throw if invalid
     new PublicKey(input);
   } catch {
     return res.status(400).json({ error: "Invalid SOL mint address" });
   }
 
   // Deep cache: short TTL (because TX patterns can change quickly)
-  // You can tune this later.
   const ttlMs = 120_000; // 2 minutes
   const cacheKey = `deep:sol:${input}`;
 
