@@ -681,6 +681,19 @@ try {
       }
     }
   }
+// --- SAFETY: always emit some LP status so UI doesn't stay on base "Unknown"
+const hasLpSignal = signals.some(
+  (s) => s.id === "LP_OK" || s.id === "LP_NOT_BURNED" || s.id === "LP_STATUS_UNKNOWN"
+);
+
+if (!hasLpSignal) {
+  addSignal(signals, {
+    id: "LP_STATUS_UNKNOWN",
+    label: "Liquidity status unknown (LP check not executed)",
+    weight: 0,
+    proof: [`https://dexscreener.com/solana/${mint}`],
+  });
+}
 
   return {
     signals,
