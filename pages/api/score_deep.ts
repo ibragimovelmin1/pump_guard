@@ -325,6 +325,7 @@ async function deepAnalyzeSol(mint: string) {
   const mintPk = new PublicKey(mint);
 
   const signals: any[] = [];
+  const liqDebug: any = {};
 
   // Contract program check (Token-2022 => nonstandard / hooks possible)
   try {
@@ -347,6 +348,7 @@ async function deepAnalyzeSol(mint: string) {
   // Always emit ONE of: LP_OK / LP_NOT_BURNED / LP_STATUS_UNKNOWN
   try {
     const disc = await discoverTopPairViaDexScreener(mint);
+    liqDebug.disc = disc || null;
     const dexPairUrl = (pairAddr: string, url?: string) => (url ? url : `https://dexscreener.com/solana/${pairAddr}`);
 
     if (!disc) {
@@ -367,6 +369,8 @@ async function deepAnalyzeSol(mint: string) {
       // For CPMM, v3 info endpoint is the correct way to get lpMint.
       let poolId = disc.pairAddress;
       let lpMint = await fetchRaydiumLpMintByPoolId(poolId);
+      liqDebug.poolId = poolId;
+      liqDebug.lpMint = lpMint;
 
       // Fallback: try Raydium mint->pool discovery (WSOL/USDC)
       if (!lpMint) {
@@ -616,6 +620,7 @@ async function deepAnalyzeSol(mint: string) {
       dev_candidate: dev || null,
       dev_reason: devCand.reason,
       tx_error: txError,
+       liq_debug: liqDebug,
     },
   };
 }
