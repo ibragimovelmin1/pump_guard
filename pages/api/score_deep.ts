@@ -181,6 +181,22 @@ async function fetchRaydiumPoolKeys(poolId: string): Promise<any | null> {
   } catch {
     return null;
   }
+  async function fetchRaydiumLpMintByPoolId(poolId: string): Promise<string | null> {
+  try {
+    const url = `https://api-v3.raydium.io/pools/info/ids?ids=${encodeURIComponent(poolId)}`;
+    const r = await fetch(url, { headers: { accept: "application/json" } });
+    if (!r.ok) return null;
+
+    const j: any = await r.json().catch(() => null);
+    const arr = j?.data;
+    const first = Array.isArray(arr) ? arr[0] : null;
+    const lpMint = first?.lpMint ?? null;
+
+    return lpMint ? String(lpMint) : null;
+  } catch {
+    return null;
+  }
+}
 }
 
 async function calcLpBurnedPct(
@@ -324,7 +340,22 @@ async function detectDevCandidate(
 /* =========================================================
    Deep analysis (slow, more accurate than base)
    ========================================================= */
+async function fetchRaydiumLpMintByPoolId(poolId: string): Promise<string | null> {
+  try {
+    const url = `https://api-v3.raydium.io/pools/info/ids?ids=${encodeURIComponent(poolId)}`;
+    const r = await fetch(url, { headers: { accept: "application/json" } });
+    if (!r.ok) return null;
 
+    const j: any = await r.json().catch(() => null);
+    const arr = j?.data;
+    const first = Array.isArray(arr) ? arr[0] : null;
+    const lpMint = first?.lpMint ?? null;
+
+    return lpMint ? String(lpMint) : null;
+  } catch {
+    return null;
+  }
+}
 async function deepAnalyzeSol(mint: string) {
   const rpc = process.env.SOLANA_RPC_URL || "https://api.mainnet-beta.solana.com";
   const conn = new Connection(rpc, "confirmed");
@@ -398,38 +429,54 @@ try {
       }
     }
 
-    // If we still can't resolve LP mint, be honest: Unknown (no penalty)
-    if (!lpMint) {
-      addSignal(signals, {
-        id: "LP_STATUS_UNKNOWN",
-        label: "Raydium pool detected but LP mint not resolved",
-        weight: 0,
-        proof: [
-          dexPairUrl(disc.pairAddress, disc.url),
-          dexTokenUrl,
-          poolId ? explorerAddress("sol", poolId) : explorerToken("sol", mint),
-        ],
-      });
-    } else {
-      // On-chain burn check for LP mint
-      const burned = await calcLpBurnedPct(conn, lpMint);
+   // If we still can't resolve LP mint, try Raydium v3 (covers CPMM) before declaring Unknown.
+if (!lpMint && poolId) {
+  lpMint = await fetchRaydiumLpMintByPoolId(poolId);
+}
 
-      // Rule v1: if <95% LP burned -> LP_NOT_BURNED (+10)
-      if (burned && burned.burnedPct < 0.95) {
-        addSignal(signals, {
-          id: "LP_NOT_BURNED",
-          label: "LP not burned (liquidity can likely be removed)",
-          value: `burned=${(burned.burnedPct * 100).toFixed(2)}%`,
-          weight: 10,
-          proof: [
-            dexPairUrl(disc.pairAddress, disc.url),
-            poolId ? explorerAddress("sol", poolId) : explorerAddress("sol", disc.pairAddress),
-            explorerToken("sol", lpMint),
-            explorerAddress("sol", INCINERATOR),
-          ],
-        });
-      }
-    }
+// If still no LP mint -> be honest: Unknown (no penalty) + ONE proof link (no spam)
+if (!lpMint) {
+  addSignal(signals, {
+    id: "LP_STATUS_UNKNOWN",
+    label: "Raydium pool detected but LP mint not resolved",
+    weight: 0,
+    proof: [dexPairUrl(disc.pairAddress, disc.url)], // ✅ only one link
+  });
+} else {
+  // On-chain burn check for LP mint
+  const burned = await calcLpBurnedPct(conn, lpMint);
+
+  // If RPC can't compute burn status -> Unknown (no penalty) + ONE link
+  if (!burned) {
+    addSignal(signals, {
+      id: "LP_STATUS_UNKNOWN",
+      label: "LP mint resolved but burn status unknown (RPC)",
+      weight: 0,
+      proof: [dexPairUrl(disc.pairAddress, disc.url)], // ✅ only one link
+    });
+  } else if (burned.burnedPct < 0.95) {
+    // Rule v1: if <95% LP burned -> LP_NOT_BURNED (+10)
+    addSignal(signals, {
+      id: "LP_NOT_BURNED",
+      label: "LP not burned (liquidity can likely be removed)",
+      value: `burned=${(burned.burnedPct * 100).toFixed(2)}%`,
+      weight: 10,
+      proof: [
+        dexPairUrl(disc.pairAddress, disc.url),
+        explorerToken("sol", lpMint),
+        explorerAddress("sol", INCINERATOR),
+      ],
+    });
+  } else {
+    // IMPORTANT: if LP is burned, emit an explicit OK status so UI doesn't stay on base "Unknown"
+    addSignal(signals, {
+      id: "LP_OK",
+      label: "LP burned (>=95%)",
+      weight: 0,
+      proof: [dexPairUrl(disc.pairAddress, disc.url)], // ✅ one link
+    });
+  }
+}
   } else {
     // Other DEX: unknown LP model (no penalty)
     addSignal(signals, {
