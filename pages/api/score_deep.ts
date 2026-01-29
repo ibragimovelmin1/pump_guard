@@ -171,10 +171,30 @@ async function fetchRaydiumLpMintByPoolId(poolId: string): Promise<string | null
 
     const j: any = await r.json().catch(() => null);
     const arr = j?.data;
-    const first = Array.isArray(arr) ? arr[0] : null;
-    const lpMint = first?.lpMint ?? null;
+    const first = Array.isArray(arr) ? arr[0] : arr;
 
-    return lpMint ? String(lpMint) : null;
+    if (!first) return null;
+
+    // lpMint can be:
+    // - string
+    // - object like { address: "..." } or { mint: "..." }
+    // - nested in first.lpMint.address
+    const raw = first?.lpMint ?? first?.lp_mint ?? null;
+
+    let lp: any = raw;
+
+    if (lp && typeof lp === "object") {
+      lp = lp.address || lp.mint || lp.pubkey || lp.toString?.() || null;
+    }
+
+    if (typeof lp !== "string") return null;
+
+    const lpMint = lp.trim();
+
+    // sanity check: should be base58-like and not "[object Object]"
+    if (!lpMint || lpMint.includes("[object")) return null;
+
+    return lpMint;
   } catch {
     return null;
   }
@@ -389,6 +409,20 @@ async function deepAnalyzeSol(mint: string) {
           proof: [dexPairUrl(disc.pairAddress, disc.url)], // ✅ one link
         });
       } else {
+        // Guard: sometimes lpMint can still be garbage
+try {
+  new PublicKey(lpMint);
+} catch {
+  addSignal(signals, {
+    id: "LP_STATUS_UNKNOWN",
+    label: "Raydium LP mint invalid (API returned non-mint value)",
+    weight: 0,
+    proof: [dexPairUrl(disc.pairAddress, disc.url)],
+  });
+  // + debug
+  liqDebug.lpMint_invalid = lpMint;
+  return;
+}
         const burned = await calcLpBurnedPct(conn, lpMint);
 
         if (!burned) {
@@ -658,15 +692,18 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
   try {
     const out = await deepAnalyzeSol(input);
 
-    const response = {
-      chain: "sol",
-      input,
-      signals: out.signals as Signal[],
-      meta: {
-        ...out.meta,
-        ms: Date.now() - t0,
-      },
-    };
+const signals = (out && Array.isArray((out as any).signals) ? (out as any).signals : []) as Signal[];
+const meta = (out && (out as any).meta ? (out as any).meta : {}) as any;
+
+const response = {
+  chain: "sol",
+  input,
+  signals,
+  meta: {
+    ...meta,
+    ms: Date.now() - t0,
+  },
+};
 
     cacheSet(cacheKey, response);
     res.setHeader("x-pg-cache", "MISS");
