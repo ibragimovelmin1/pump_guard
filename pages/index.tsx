@@ -585,6 +585,9 @@ if ((j?.chain || chain) === "sol" && type === "token" && j?.token?.address) {
     if (!data) return [];
     return mergeSignals(data.signals ?? [], deepSignals ?? []);
   }, [data, deepSignals]);
+  const mergedScore = useMemo(() => {
+  return (mergedSignals || []).reduce((sum, s: any) => sum + (Number(s?.weight) || 0), 0);
+}, [mergedSignals]);
 
   /* ---------- Dynamic rows ---------- */
   function resolveTop10() {
@@ -691,7 +694,7 @@ if ((j?.chain || chain) === "sol" && type === "token" && j?.token?.address) {
             <div className="row" style={{ justifyContent: "space-between" }}>
               <div className="badge">{data?.chain?.toUpperCase() ?? "—"}</div>
               <div style={{ fontWeight: 900, fontSize: 22 }}>
-                {data ? `${data.risk.score} / 100` : "0 / 100"}
+                {data ? `${mergedScore} / 100` : "0 / 100"}
               </div>
             </div>
 
@@ -853,7 +856,7 @@ if ((j?.chain || chain) === "sol" && type === "token" && j?.token?.address) {
               {/* VERDICT */}
               <div className="card">
                 {(() => {
-                  const vLevel = verdictFromScore(data.risk.score);
+                  const vLevel = verdictFromScore(mergedScore);
                   const v = VERDICT_COPY[vLevel];
 
                   const topSignals = pickSmartSignals({
@@ -868,7 +871,7 @@ if ((j?.chain || chain) === "sol" && type === "token" && j?.token?.address) {
 
                   const tweet = toTweetText({
                     chain: data.chain,
-                    score: data.risk.score,
+                    score: mergedScore,
                     level: vLevel,
                     confidence: data.risk.confidence,
                     topSignals,
