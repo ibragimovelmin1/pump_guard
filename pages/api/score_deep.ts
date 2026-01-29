@@ -437,12 +437,8 @@ try {
             id: "LP_NOT_BURNED",
             label: "LP not burned / unlocked",
             value: `burned=${(burned.burnedPct * 100).toFixed(2)}%`,
-            weight: 10,
-            proof: [
-              dexPairUrl(disc.pairAddress, disc.url),
-              explorerToken("sol", lpMint),
-              explorerAddress("sol", INCINERATOR),
-            ],
+            weight: 15,
+            proof: [dexPairUrl(disc.pairAddress, disc.url)],
           });
         } else {
           addSignal(signals, {

@@ -320,8 +320,8 @@ function categorizeSignalId(id: string): SignalCategory | null {
 const CATEGORY_CAP: Record<SignalCategory, number> = {
   PERMISSIONS: 10,
   DISTRIBUTION: 30,
-  LIQUIDITY: 10,
-  DEV_CONTRACT: 30,
+  LIQUIDITY: 15,
+  DEV_CONTRACT: 25,
   TX_PATTERNS: 20,
 };
 
@@ -385,14 +385,14 @@ const WHY_GROUPS: { title: string; cap: number; rows: WhyRow[] }[] = [
     cap: 30,
     rows: [
       { id: "BLACKLIST_OR_TRANSFER_BLOCK", label: "Blacklist / transfer blocking", points: 15 },
-      { id: "HIGH_TAX", label: "High buy/sell tax", points: 10 },
+      { id: "HIGH_TAX", label: "High buy/sell tax", points: 5 },
       { id: "NONSTANDARD_TRANSFER", label: "Non-standard transfer logic / hooks", points: 5 },
     ],
   },
   {
     title: "LIQUIDITY (LP)",
-    cap: 10,
-    rows: [{ id: "LP_NOT_BURNED", label: "LP not burned / unlocked", points: 10 }],
+    cap: 15,
+    rows: [{ id: "LP_NOT_BURNED", label: "LP not burned / unlocked", points: 15 }],
   },
 ];
 
@@ -588,6 +588,7 @@ if ((j?.chain || chain) === "sol" && type === "token" && j?.token?.address) {
   const mergedScore = useMemo(() => {
   return (mergedSignals || []).reduce((sum, s: any) => sum + (Number(s?.weight) || 0), 0);
 }, [mergedSignals]);
+  const mergedLevel = useMemo(() => verdictFromScore(mergedScore), [mergedScore]);
 
   /* ---------- Dynamic rows ---------- */
   function resolveTop10() {
@@ -732,7 +733,7 @@ if ((j?.chain || chain) === "sol" && type === "token" && j?.token?.address) {
             <div className="row" style={{ gap: 10 }}>
               <div>
                 <div className="small">Risk</div>
-                <RiskBadge level={data?.risk.level ?? "LOW"} />
+                <RiskBadge level={mergedLevel} />
               </div>
 
               <div>
