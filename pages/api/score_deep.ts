@@ -3,6 +3,7 @@ import type { NextApiRequest, NextApiResponse } from "next";
 import type { Signal } from "../../lib/types";
 import { Connection, PublicKey } from "@solana/web3.js";
 import { explorerAddress, explorerToken } from "../../lib/explorer";
+import { discoverTopPairViaDexScreener } from "../../lib/dexscreener";
 
 /* =========================================================
    In-memory cache (shared global map)
@@ -350,38 +351,97 @@ async function deepAnalyzeSol(mint: string) {
     // ignore
   }
 
-  // ===== LIQUIDITY: Raydium LP burn check (v1) =====
-  // - pool discovery via Raydium official API
-  // - verify LP burn strictly on-chain by checking LP mint top holders for incinerator
-  try {
-    const found = await discoverRaydiumPoolId(mint);
-    if (found?.poolId) {
-      const keys = await fetchRaydiumPoolKeys(found.poolId);
-      const lpMint = pickLpMint(keys);
+// ===== LIQUIDITY: LP checks (DEEP only) =====
+// 1) Discover top pair via DexScreener (dexId + pairAddress)
+// 2) If PumpSwap -> LP Unknown (no LP token model), no penalty
+// 3) If Raydium -> try pairAddress as poolId; if LP mint not resolved -> fallback to discoverRaydiumPoolId()
+// 4) Never break deep endpoint
 
-      // Only classic pools have lpMint (AMM/CPMM). CLMM-like may not.
-      if (lpMint) {
-        const burned = await calcLpBurnedPct(conn, lpMint);
+try {
+  const disc = await discoverTopPairViaDexScreener(mint);
 
-        // Rule v1: if <95% LP is burned -> LP_NOT_BURNED
-        if (burned && burned.burnedPct < 0.95) {
-          addSignal(signals, {
-            id: "LP_NOT_BURNED",
-            label: "LP not burned (liquidity can likely be removed)",
-            value: `burned=${(burned.burnedPct * 100).toFixed(2)}%`,
-            weight: 10,
-            proof: [
-              explorerAddress("sol", found.poolId),
-              explorerToken("sol", lpMint),
-              explorerAddress("sol", INCINERATOR),
-            ],
-          });
-        }
+  // Helper for proofs
+  const dexTokenUrl = `https://dexscreener.com/solana/${mint}`;
+  const dexPairUrl = (pairAddr: string, url?: string) =>
+    url ? url : `https://dexscreener.com/solana/${pairAddr}`;
+
+  if (!disc) {
+    addSignal(signals, {
+      id: "LP_STATUS_UNKNOWN",
+      label: "Liquidity status unknown (no pool detected)",
+      weight: 0,
+      proof: [dexTokenUrl, explorerToken("sol", mint)],
+    });
+  } else if (disc.dexId === "pumpswap") {
+    addSignal(signals, {
+      id: "LP_STATUS_UNKNOWN",
+      label: "PumpSwap AMM (no LP token model)",
+      weight: 0,
+      proof: [dexPairUrl(disc.pairAddress, disc.url), dexTokenUrl],
+    });
+  } else if (disc.dexId === "raydium") {
+    let poolId: string | null = null;
+    let lpMint: string | null = null;
+
+    // (A) Try DexScreener pairAddress as Raydium poolId
+    poolId = disc.pairAddress;
+    const keysA = await fetchRaydiumPoolKeys(poolId);
+    lpMint = pickLpMint(keysA);
+
+    // (B) Fallback: use your existing Raydium API discovery (WSOL/USDC) to get a poolId
+    if (!lpMint) {
+      const found = await discoverRaydiumPoolId(mint);
+      if (found?.poolId) {
+        poolId = found.poolId;
+        const keysB = await fetchRaydiumPoolKeys(poolId);
+        lpMint = pickLpMint(keysB);
       }
     }
-  } catch {
-    // never break deep endpoint
+
+    // If we still can't resolve LP mint, be honest: Unknown (no penalty)
+    if (!lpMint) {
+      addSignal(signals, {
+        id: "LP_STATUS_UNKNOWN",
+        label: "Raydium pool detected but LP mint not resolved",
+        weight: 0,
+        proof: [
+          dexPairUrl(disc.pairAddress, disc.url),
+          dexTokenUrl,
+          poolId ? explorerAddress("sol", poolId) : explorerToken("sol", mint),
+        ],
+      });
+    } else {
+      // On-chain burn check for LP mint
+      const burned = await calcLpBurnedPct(conn, lpMint);
+
+      // Rule v1: if <95% LP burned -> LP_NOT_BURNED (+10)
+      if (burned && burned.burnedPct < 0.95) {
+        addSignal(signals, {
+          id: "LP_NOT_BURNED",
+          label: "LP not burned (liquidity can likely be removed)",
+          value: `burned=${(burned.burnedPct * 100).toFixed(2)}%`,
+          weight: 10,
+          proof: [
+            dexPairUrl(disc.pairAddress, disc.url),
+            poolId ? explorerAddress("sol", poolId) : explorerAddress("sol", disc.pairAddress),
+            explorerToken("sol", lpMint),
+            explorerAddress("sol", INCINERATOR),
+          ],
+        });
+      }
+    }
+  } else {
+    // Other DEX: unknown LP model (no penalty)
+    addSignal(signals, {
+      id: "LP_STATUS_UNKNOWN",
+      label: `DEX detected (${disc.dexId}), LP model not implemented`,
+      weight: 0,
+      proof: [dexPairUrl(disc.pairAddress, disc.url), `https://dexscreener.com/solana/${mint}`],
+    });
   }
+} catch {
+  // never break deep endpoint
+}
 
   // Dev candidate for dev-dump heuristics
   const devCand = await detectDevCandidate(conn, mintPk);
