@@ -449,16 +449,17 @@ try {
 
   // Pull first N enhanced transactions where mint address is involved
   // (oldest first => good for launch analysis)
-  const LIMIT = 120; // slower but still manageable
-  const txs = await withTimeout(heliusEnhancedTxByAddressAsc(mint, LIMIT), 18_000);
+  let txs: HeliusEnhancedTx[] = [];
+let txError: string | null = null;
 
-  // If nothing, return empty deep
-  if (!txs.length) {
-    return {
-      signals,
-      meta: { tx_checked: 0, note: "No enhanced transactions found" },
-    };
-  }
+try {
+  const LIMIT = 100;
+  txs = await withTimeout(heliusEnhancedTxByAddressAsc(mint, LIMIT), 18_000);
+ } catch (e: any) {
+  // IMPORTANT: do not fail deep just because enhanced tx is down/strict
+  txError = e?.message || "enhanced tx failed";
+  txs = [];
+ }
 
   const launchTs = typeof txs[0]?.timestamp === "number" ? txs[0]!.timestamp! : null;
 
@@ -690,16 +691,28 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       },
     };
 
-    cacheSet(cacheKey, response);
-    res.setHeader("x-pg-cache", "MISS");
-    return res.status(200).json(response);
-  } catch (e: any) {
-    return res.status(500).json({
-      error: e?.message || "deep scoring failed",
-      chain: "sol",
-      input,
-      signals: [],
-      meta: { ms: Date.now() - t0 },
-    });
-  }
+  cacheSet(cacheKey, response);
+res.setHeader("x-pg-cache", "MISS");
+
+const tx_error = (response as any)?.meta?.tx_error ?? null;
+
+return res.status(200).json({
+  ...response,
+  meta: {
+    ...(response.meta || {}),
+    tx_error,
+  },
+});
+} catch (e: any) {
+  return res.status(500).json({
+    error: e?.message || "deep scoring failed",
+    chain: "sol",
+    input,
+    signals: [],
+    meta: {
+      ms: Date.now() - t0,
+      tx_error: e?.message || null,
+    },
+  });
+}
 }
