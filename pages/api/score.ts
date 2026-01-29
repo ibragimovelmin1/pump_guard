@@ -616,7 +616,7 @@ async function solTokenSignals(
           label: "Dev wallet holds a very large share of supply",
           value: `dev=${devPct.toFixed(1)}%`,
           weight: 15,
-          proof: [explorerAddress("sol", devAddr), explorerToken("sol", mint)],
+          proof: [explorerAddress("sol", devAddr),],
         } as any);
       } else if (devPct > 30) {
         addSignal({
@@ -624,7 +624,7 @@ async function solTokenSignals(
           label: "Dev wallet holds a large share of supply",
           value: `dev=${devPct.toFixed(1)}%`,
           weight: 10,
-          proof: [explorerAddress("sol", devAddr), explorerToken("sol", mint)],
+          proof: [explorerAddress("sol", devAddr),],
         } as any);
       }
     } catch {
