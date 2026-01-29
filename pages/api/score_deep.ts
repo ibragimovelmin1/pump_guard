@@ -55,7 +55,9 @@ function asNum(x: any): number | null {
 
 function toProofLinks(urls: string[] | undefined) {
   const arr = Array.isArray(urls) ? urls : [];
-  return arr.map((url) => {
+  const dedup = uniq(arr).filter(Boolean);
+
+  return dedup.map((url) => {
     let label = "Proof";
     if (url.includes("solscan.io")) label = "Solscan";
     else if (url.includes("solana.fm")) label = "SolanaFM";
@@ -66,26 +68,28 @@ function toProofLinks(urls: string[] | undefined) {
 }
 
 function addSignal(signals: any[], s: Signal) {
-  const proof = Array.isArray((s as any).proof) ? (s as any).proof : [];
+  const raw = (s as any).proof;
+  const proof = Array.isArray(raw) ? raw.map((x) => String(x)).filter(Boolean) : [];
+
+  const dedup = Array.from(new Set(proof));
+
   signals.push({
     ...s,
-    proof,
-    proofLinks: toProofLinks(proof),
+    proof: dedup,
+    proofLinks: toProofLinks(dedup),
   });
 }
 
 /* =========================================================
-   Raydium LP check (v1): discovery via Raydium API, verify on-chain
+   Raydium LP check (Deep only)
    ========================================================= */
 
 const RAYDIUM_API = "https://api-v3.raydium.io";
+const INCINERATOR = "1nc1nerator11111111111111111111111111111111";
 
-// Common quote mints (mainnet)
+// (fallback) Common quote mints (mainnet)
 const WSOL_MINT = "So11111111111111111111111111111111111111112";
 const USDC_MINT = "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v";
-
-// Solana burn address (incinerator)
-const INCINERATOR = "1nc1nerator11111111111111111111111111111111";
 
 async function fetchJson(url: string, ms = 6000) {
   const ctrl = new AbortController();
@@ -100,7 +104,6 @@ async function fetchJson(url: string, ms = 6000) {
   }
 }
 
-// Raydium API wrappers can vary; this extracts an array from common shapes
 function extractArray(j: any): any[] {
   if (!j) return [];
   if (Array.isArray(j)) return j;
@@ -121,16 +124,6 @@ function pickPoolId(pool: any): string | null {
     pool?.pool_id ||
     pool?.poolIdStr ||
     pool?.pool_id_str ||
-    null
-  );
-}
-
-function pickLpMint(keys: any): string | null {
-  return (
-    keys?.lpMint ||
-    keys?.lp_mint ||
-    keys?.lpMintAddress ||
-    keys?.lp_mint_address ||
     null
   );
 }
@@ -159,7 +152,6 @@ async function discoverRaydiumPoolId(
       const pools = extractArray(j);
       if (!pools.length) continue;
 
-      // без сортировки на сервере: берём первый найденный пул
       const poolId = pickPoolId(pools[0]);
       if (poolId) return { poolId, quote: q.quote };
     } catch {
@@ -170,20 +162,10 @@ async function discoverRaydiumPoolId(
   return null;
 }
 
-async function fetchRaydiumPoolKeys(poolId: string): Promise<any | null> {
-  const url = `${RAYDIUM_API}/pools/key/ids?ids=${encodeURIComponent(poolId)}`;
+// ✅ This is the correct, single, global function (NOT nested)
+async function fetchRaydiumLpMintByPoolId(poolId: string): Promise<string | null> {
   try {
-    const j = await fetchJson(url, 7000);
-    const arr = extractArray(j);
-    if (arr.length) return arr[0];
-    if (j?.data && !Array.isArray(j.data)) return j.data;
-    return j;
-  } catch {
-    return null;
-  }
-  async function fetchRaydiumLpMintByPoolId(poolId: string): Promise<string | null> {
-  try {
-    const url = `https://api-v3.raydium.io/pools/info/ids?ids=${encodeURIComponent(poolId)}`;
+    const url = `${RAYDIUM_API}/pools/info/ids?ids=${encodeURIComponent(poolId)}`;
     const r = await fetch(url, { headers: { accept: "application/json" } });
     if (!r.ok) return null;
 
@@ -196,7 +178,6 @@ async function fetchRaydiumPoolKeys(poolId: string): Promise<any | null> {
   } catch {
     return null;
   }
-}
 }
 
 async function calcLpBurnedPct(
@@ -215,14 +196,13 @@ async function calcLpBurnedPct(
 
   let burnedRaw = 0n;
 
-  const MAX_CHECK = Math.min(accounts.length, 25);
+  // Keep it bounded so it won't hang
+  const MAX_CHECK = Math.min(accounts.length, 12);
   for (let i = 0; i < MAX_CHECK; i++) {
     const accAddr = accounts[i]?.address;
-    const amountStr = accounts[i]?.amount; // raw string
-
+    const amountStr = accounts[i]?.amount;
     if (!accAddr || !amountStr) continue;
 
-    // parsed token account => info.owner is the owner wallet address
     const info = await conn.getParsedAccountInfo(accAddr);
     const owner = (info?.value as any)?.data?.parsed?.info?.owner;
 
@@ -282,7 +262,6 @@ async function detectDevCandidate(
   conn: Connection,
   mintPk: PublicKey
 ): Promise<{ dev?: string; reason: string; proof?: string[] }> {
-  // 1) Mint account authorities (fast)
   try {
     const mintAcc = await conn.getParsedAccountInfo(mintPk);
     const parsed: any = (mintAcc.value?.data as any)?.parsed;
@@ -309,7 +288,6 @@ async function detectDevCandidate(
     // ignore
   }
 
-  // 2) Fallback: oldest tx signer (slower)
   try {
     const sigs = await conn.getSignaturesForAddress(mintPk, { limit: 1000 });
     if (!sigs.length) return { reason: "unknown" };
@@ -340,22 +318,7 @@ async function detectDevCandidate(
 /* =========================================================
    Deep analysis (slow, more accurate than base)
    ========================================================= */
-async function fetchRaydiumLpMintByPoolId(poolId: string): Promise<string | null> {
-  try {
-    const url = `https://api-v3.raydium.io/pools/info/ids?ids=${encodeURIComponent(poolId)}`;
-    const r = await fetch(url, { headers: { accept: "application/json" } });
-    if (!r.ok) return null;
 
-    const j: any = await r.json().catch(() => null);
-    const arr = j?.data;
-    const first = Array.isArray(arr) ? arr[0] : null;
-    const lpMint = first?.lpMint ?? null;
-
-    return lpMint ? String(lpMint) : null;
-  } catch {
-    return null;
-  }
-}
 async function deepAnalyzeSol(mint: string) {
   const rpc = process.env.SOLANA_RPC_URL || "https://api.mainnet-beta.solana.com";
   const conn = new Connection(rpc, "confirmed");
@@ -367,8 +330,6 @@ async function deepAnalyzeSol(mint: string) {
   try {
     const info = await conn.getAccountInfo(mintPk);
     const owner = info?.owner?.toBase58?.();
-    // Token-2022 program id commonly:
-    // TokenzQdBNbLqP5VEhdkAS6EPFLC1PHnBqCXEpPxuEb
     if (owner && owner.startsWith("TokenzQd")) {
       addSignal(signals, {
         id: "NONSTANDARD_TRANSFER",
@@ -382,137 +343,120 @@ async function deepAnalyzeSol(mint: string) {
     // ignore
   }
 
-// ===== LIQUIDITY: LP checks (DEEP only) =====
-// 1) Discover top pair via DexScreener (dexId + pairAddress)
-// 2) If PumpSwap -> LP Unknown (no LP token model), no penalty
-// 3) If Raydium -> try pairAddress as poolId; if LP mint not resolved -> fallback to discoverRaydiumPoolId()
-// 4) Never break deep endpoint
+  // ===== LIQUIDITY (DEEP only) =====
+  // Always emit ONE of: LP_OK / LP_NOT_BURNED / LP_STATUS_UNKNOWN
+  try {
+    const disc = await discoverTopPairViaDexScreener(mint);
+    const dexPairUrl = (pairAddr: string, url?: string) => (url ? url : `https://dexscreener.com/solana/${pairAddr}`);
 
-try {
-  const disc = await discoverTopPairViaDexScreener(mint);
+    if (!disc) {
+      addSignal(signals, {
+        id: "LP_STATUS_UNKNOWN",
+        label: "Liquidity status unknown (no pool detected)",
+        weight: 0,
+        proof: [`https://dexscreener.com/solana/${mint}`],
+      });
+    } else if (disc.dexId === "pumpswap") {
+      addSignal(signals, {
+        id: "LP_STATUS_UNKNOWN",
+        label: "PumpSwap AMM (no LP token model)",
+        weight: 0,
+        proof: [dexPairUrl(disc.pairAddress, disc.url)],
+      });
+    } else if (disc.dexId === "raydium") {
+      // For CPMM, v3 info endpoint is the correct way to get lpMint.
+      let poolId = disc.pairAddress;
+      let lpMint = await fetchRaydiumLpMintByPoolId(poolId);
 
-  // Helper for proofs
-  const dexTokenUrl = `https://dexscreener.com/solana/${mint}`;
-  const dexPairUrl = (pairAddr: string, url?: string) =>
-    url ? url : `https://dexscreener.com/solana/${pairAddr}`;
-
-  if (!disc) {
-    addSignal(signals, {
-      id: "LP_STATUS_UNKNOWN",
-      label: "Liquidity status unknown (no pool detected)",
-      weight: 0,
-      proof: [dexTokenUrl, explorerToken("sol", mint)],
-    });
-  } else if (disc.dexId === "pumpswap") {
-    addSignal(signals, {
-      id: "LP_STATUS_UNKNOWN",
-      label: "PumpSwap AMM (no LP token model)",
-      weight: 0,
-      proof: [dexPairUrl(disc.pairAddress, disc.url), dexTokenUrl],
-    });
-  } else if (disc.dexId === "raydium") {
-    let poolId: string | null = null;
-    let lpMint: string | null = null;
-
-    // (A) Try DexScreener pairAddress as Raydium poolId
-    poolId = disc.pairAddress;
-    const keysA = await fetchRaydiumPoolKeys(poolId);
-    lpMint = pickLpMint(keysA);
-
-    // (B) Fallback: use your existing Raydium API discovery (WSOL/USDC) to get a poolId
-    if (!lpMint) {
-      const found = await discoverRaydiumPoolId(mint);
-      if (found?.poolId) {
-        poolId = found.poolId;
-        const keysB = await fetchRaydiumPoolKeys(poolId);
-        lpMint = pickLpMint(keysB);
+      // Fallback: try Raydium mint->pool discovery (WSOL/USDC)
+      if (!lpMint) {
+        const found = await discoverRaydiumPoolId(mint);
+        if (found?.poolId) {
+          poolId = found.poolId;
+          lpMint = await fetchRaydiumLpMintByPoolId(poolId);
+        }
       }
+
+      if (!lpMint) {
+        addSignal(signals, {
+          id: "LP_STATUS_UNKNOWN",
+          label: "Raydium pool detected but LP mint not resolved",
+          weight: 0,
+          proof: [dexPairUrl(disc.pairAddress, disc.url)], // ✅ one link
+        });
+      } else {
+        const burned = await calcLpBurnedPct(conn, lpMint);
+
+        if (!burned) {
+          addSignal(signals, {
+            id: "LP_STATUS_UNKNOWN",
+            label: "LP mint resolved but burn status unknown (RPC)",
+            weight: 0,
+            proof: [dexPairUrl(disc.pairAddress, disc.url)], // ✅ one link
+          });
+        } else if (burned.burnedPct < 0.95) {
+          addSignal(signals, {
+            id: "LP_NOT_BURNED",
+            label: "LP not burned / unlocked",
+            value: `burned=${(burned.burnedPct * 100).toFixed(2)}%`,
+            weight: 10,
+            proof: [
+              dexPairUrl(disc.pairAddress, disc.url),
+              explorerToken("sol", lpMint),
+              explorerAddress("sol", INCINERATOR),
+            ],
+          });
+        } else {
+          addSignal(signals, {
+            id: "LP_OK",
+            label: "LP burned (>=95%)",
+            weight: 0,
+            proof: [dexPairUrl(disc.pairAddress, disc.url)], // ✅ one link
+          });
+        }
+      }
+    } else {
+      addSignal(signals, {
+        id: "LP_STATUS_UNKNOWN",
+        label: `DEX detected (${disc.dexId}), LP model not implemented`,
+        weight: 0,
+        proof: [dexPairUrl(disc.pairAddress, disc.url)],
+      });
     }
-
-   // If we still can't resolve LP mint, try Raydium v3 (covers CPMM) before declaring Unknown.
-if (!lpMint && poolId) {
-  lpMint = await fetchRaydiumLpMintByPoolId(poolId);
-}
-
-// If still no LP mint -> be honest: Unknown (no penalty) + ONE proof link (no spam)
-if (!lpMint) {
-  addSignal(signals, {
-    id: "LP_STATUS_UNKNOWN",
-    label: "Raydium pool detected but LP mint not resolved",
-    weight: 0,
-    proof: [dexPairUrl(disc.pairAddress, disc.url)], // ✅ only one link
-  });
-} else {
-  // On-chain burn check for LP mint
-  const burned = await calcLpBurnedPct(conn, lpMint);
-
-  // If RPC can't compute burn status -> Unknown (no penalty) + ONE link
-  if (!burned) {
+  } catch {
+    // never break deep
     addSignal(signals, {
       id: "LP_STATUS_UNKNOWN",
-      label: "LP mint resolved but burn status unknown (RPC)",
+      label: "Liquidity status unknown (LP check error)",
       weight: 0,
-      proof: [dexPairUrl(disc.pairAddress, disc.url)], // ✅ only one link
-    });
-  } else if (burned.burnedPct < 0.95) {
-    // Rule v1: if <95% LP burned -> LP_NOT_BURNED (+10)
-    addSignal(signals, {
-      id: "LP_NOT_BURNED",
-      label: "LP not burned (liquidity can likely be removed)",
-      value: `burned=${(burned.burnedPct * 100).toFixed(2)}%`,
-      weight: 10,
-      proof: [
-        dexPairUrl(disc.pairAddress, disc.url),
-        explorerToken("sol", lpMint),
-        explorerAddress("sol", INCINERATOR),
-      ],
-    });
-  } else {
-    // IMPORTANT: if LP is burned, emit an explicit OK status so UI doesn't stay on base "Unknown"
-    addSignal(signals, {
-      id: "LP_OK",
-      label: "LP burned (>=95%)",
-      weight: 0,
-      proof: [dexPairUrl(disc.pairAddress, disc.url)], // ✅ one link
+      proof: [`https://dexscreener.com/solana/${mint}`],
     });
   }
-}
-  } else {
-    // Other DEX: unknown LP model (no penalty)
-    addSignal(signals, {
-      id: "LP_STATUS_UNKNOWN",
-      label: `DEX detected (${disc.dexId}), LP model not implemented`,
-      weight: 0,
-      proof: [dexPairUrl(disc.pairAddress, disc.url), `https://dexscreener.com/solana/${mint}`],
-    });
-  }
-} catch {
-  // never break deep endpoint
-}
 
-  // Dev candidate for dev-dump heuristics
+  // Dev candidate
   const devCand = await detectDevCandidate(conn, mintPk);
   const dev = devCand.dev;
 
-  // Pull first N enhanced transactions where mint address is involved
-  // (oldest first => good for launch analysis)
+  // Enhanced TX
   let txs: HeliusEnhancedTx[] = [];
-let txError: string | null = null;
+  let txError: string | null = null;
 
-try {
-  const LIMIT = 100;
-  txs = await withTimeout(heliusEnhancedTxByAddressAsc(mint, LIMIT), 18_000);
- } catch (e: any) {
-  // IMPORTANT: do not fail deep just because enhanced tx is down/strict
-  txError = e?.message || "enhanced tx failed";
-  txs = [];
- }
+  try {
+    const LIMIT = 100; // strict, avoid helius 400
+    txs = await withTimeout<HeliusEnhancedTx[]>(
+  heliusEnhancedTxByAddressAsc(mint, LIMIT),
+  18_000
+);
+  } catch (e: any) {
+    txError = e?.message || "enhanced tx failed";
+    txs = [];
+  }
 
   const launchTs = typeof txs[0]?.timestamp === "number" ? txs[0]!.timestamp! : null;
 
-  // --- Collect buyers in the very early window (bundled launch heuristic)
-  const EARLY_WINDOW_SEC = 60; // strict: 60s
-  const EARLY_WINDOW_SEC_WIDE = 180; // wider: 3min
+  // --- Buyers burst heuristics ---
+  const EARLY_WINDOW_SEC = 60;
+  const EARLY_WINDOW_SEC_WIDE = 180;
 
   const buyersEarly: string[] = [];
   const buyersEarlyWide: string[] = [];
@@ -524,7 +468,6 @@ try {
     const dt = ts - launchTs;
     if (dt < 0) continue;
 
-    // tokenTransfers: treat "toUserAccount" as buyer (receiving token)
     const tts = Array.isArray(tx.tokenTransfers) ? tx.tokenTransfers : [];
     for (const tt of tts) {
       if ((tt?.mint || "").toString() !== mint) continue;
@@ -540,8 +483,6 @@ try {
   const uniqBuyersEarly = uniq(buyersEarly);
   const uniqBuyersEarlyWide = uniq(buyersEarlyWide);
 
-  // Bundled / sniper / MEV heuristic:
-  // If many unique buyers appear extremely quickly (first 60s), flag it.
   if (uniqBuyersEarly.length >= 6) {
     const proofSig = txs.find((t) => t?.signature)?.signature;
     addSignal(signals, {
@@ -562,16 +503,14 @@ try {
     });
   }
 
-  // Cluster funding heuristic:
-  // In early window, many buyers receiving SOL from same funder.
-  // We'll scan nativeTransfers to find funders who funded multiple buyers.
+  // Cluster funding heuristic
   const funderToCount = new Map<string, { count: number; buyers: Set<string>; proofSig?: string }>();
 
   for (const tx of txs) {
     const ts = typeof tx.timestamp === "number" ? tx.timestamp : null;
     if (!launchTs || !ts) continue;
     const dt = ts - launchTs;
-    if (dt < 0 || dt > 15 * 60) continue; // first 15 minutes
+    if (dt < 0 || dt > 15 * 60) continue;
 
     const nts = Array.isArray(tx.nativeTransfers) ? tx.nativeTransfers : [];
     for (const nt of nts) {
@@ -580,15 +519,9 @@ try {
       const amt = asNum(nt?.amount);
 
       if (!from || !to || !amt || amt <= 0) continue;
-
-      // If "to" is among early buyers wide, treat it as funding
       if (!uniqBuyersEarlyWide.includes(to)) continue;
 
-      const cur = funderToCount.get(from) || {
-        count: 0,
-        buyers: new Set<string>(),
-        proofSig: undefined,
-      };
+      const cur = funderToCount.get(from) || { count: 0, buyers: new Set<string>(), proofSig: undefined as string | undefined };
       cur.buyers.add(to);
       cur.count = cur.buyers.size;
       if (!cur.proofSig && tx.signature) cur.proofSig = tx.signature;
@@ -596,7 +529,6 @@ try {
     }
   }
 
-  // Pick best cluster funder
   let bestFunder: string | null = null;
   let bestCount = 0;
   let bestProofSig: string | undefined;
@@ -622,8 +554,7 @@ try {
     });
   }
 
-  // Dev dump early heuristic (requires dev candidate)
-  // We look for tokenTransfers of this mint where fromUserAccount == dev in first 60 minutes
+  // Dev dump early heuristic
   if (dev && launchTs) {
     let totalDevOut = 0;
     let firstDumpSig: string | undefined;
@@ -632,7 +563,7 @@ try {
       const ts = typeof tx.timestamp === "number" ? tx.timestamp : null;
       if (!ts) continue;
       const dt = ts - launchTs;
-      if (dt < 0 || dt > 60 * 60) continue; // first 60 minutes
+      if (dt < 0 || dt > 60 * 60) continue;
 
       const tts = Array.isArray(tx.tokenTransfers) ? tx.tokenTransfers : [];
       for (const tt of tts) {
@@ -648,10 +579,7 @@ try {
       }
     }
 
-    // threshold: if dev sent out "a lot" of tokens early (absolute heuristic)
-    // For more accuracy, we later compare vs supply and %; for now it flags big early movement.
     if (totalDevOut > 0) {
-      // Make it stricter: only if > 1% of supply (when supply is available)
       let supplyUi: number | null = null;
       try {
         const supply = await conn.getTokenSupply(mintPk);
@@ -659,8 +587,6 @@ try {
       } catch {}
 
       const pct = supplyUi && supplyUi > 0 ? (totalDevOut / supplyUi) * 100 : null;
-
-      // If we can compute %, use it; otherwise require higher absolute amount
       const shouldFlag = pct !== null ? pct >= 1.0 : totalDevOut >= 100_000;
 
       if (shouldFlag) {
@@ -681,19 +607,6 @@ try {
       }
     }
   }
-// --- SAFETY: always emit some LP status so UI doesn't stay on base "Unknown"
-const hasLpSignal = signals.some(
-  (s) => s.id === "LP_OK" || s.id === "LP_NOT_BURNED" || s.id === "LP_STATUS_UNKNOWN"
-);
-
-if (!hasLpSignal) {
-  addSignal(signals, {
-    id: "LP_STATUS_UNKNOWN",
-    label: "Liquidity status unknown (LP check not executed)",
-    weight: 0,
-    proof: [`https://dexscreener.com/solana/${mint}`],
-  });
-}
 
   return {
     signals,
@@ -702,6 +615,7 @@ if (!hasLpSignal) {
       launch_ts: launchTs,
       dev_candidate: dev || null,
       dev_reason: devCand.reason,
+      tx_error: txError,
     },
   };
 }
@@ -719,14 +633,12 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
   if (!input) return res.status(400).json({ error: "Missing input" });
   if (chain !== "sol") return res.status(400).json({ error: "score_deep currently supports only SOL" });
 
-  // Validate mint
   try {
     new PublicKey(input);
   } catch {
     return res.status(400).json({ error: "Invalid SOL mint address" });
   }
 
-  // Deep cache: short TTL (because TX patterns can change quickly)
   const ttlMs = 120_000; // 2 minutes
   const cacheKey = `deep:sol:${input}`;
 
@@ -751,28 +663,19 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       },
     };
 
-  cacheSet(cacheKey, response);
-res.setHeader("x-pg-cache", "MISS");
-
-const tx_error = (response as any)?.meta?.tx_error ?? null;
-
-return res.status(200).json({
-  ...response,
-  meta: {
-    ...(response.meta || {}),
-    tx_error,
-  },
-});
-} catch (e: any) {
-  return res.status(500).json({
-    error: e?.message || "deep scoring failed",
-    chain: "sol",
-    input,
-    signals: [],
-    meta: {
-      ms: Date.now() - t0,
-      tx_error: e?.message || null,
-    },
-  });
-}
+    cacheSet(cacheKey, response);
+    res.setHeader("x-pg-cache", "MISS");
+    return res.status(200).json(response);
+  } catch (e: any) {
+    return res.status(500).json({
+      error: e?.message || "deep scoring failed",
+      chain: "sol",
+      input,
+      signals: [],
+      meta: {
+        ms: Date.now() - t0,
+        tx_error: e?.message || null,
+      },
+    });
+  }
 }
