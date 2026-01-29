@@ -633,10 +633,10 @@ try {
               : `dev_out=${Math.round(totalDevOut)} (first 60m)`,
           weight: 10,
           proof: [
-            explorerAddress("sol", dev),
-            firstDumpSig ? `https://solscan.io/tx/${firstDumpSig}` : explorerToken("sol", mint),
-            ...(devCand.proof || []),
-          ],
+  firstDumpSig
+    ? `https://solscan.io/tx/${firstDumpSig}`
+    : explorerAddress("sol", dev),
+],
         });
       }
     }
